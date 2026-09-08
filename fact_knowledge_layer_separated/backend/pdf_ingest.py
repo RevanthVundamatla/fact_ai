@@ -1,6 +1,6 @@
 from pathlib import Path
 import hashlib
-import fitz
+import pymupdf
 from .fact_extractor import extract_page_facts
 
 def sha256_file(path: Path):
@@ -11,7 +11,7 @@ def sha256_file(path: Path):
     return h.hexdigest()
 
 def extract_pdf(path: Path):
-    doc = fitz.open(path)
+    doc = pymupdf.open(path)
     pages = []
     for idx, page in enumerate(doc, start=1):
         text = page.get_text("text") or ""
