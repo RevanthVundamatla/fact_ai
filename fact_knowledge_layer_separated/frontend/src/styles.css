@@ -72,6 +72,8 @@ aside {
   position: sticky;
   top: 0;
   align-self: flex-start;
+
+  z-index: 20;
 }
 
 
@@ -293,10 +295,11 @@ header p {
 
 /* =========================================================
    MOBILE MENU BUTTON
+   HIDDEN ON DESKTOP
 ========================================================= */
 
 .mobile-menu-button {
-  display: none;
+  display: none !important;
 
   align-items: center;
   justify-content: center;
@@ -320,7 +323,8 @@ header p {
 
   cursor: pointer;
 
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
 .mobile-menu-button svg {
@@ -331,14 +335,15 @@ header p {
 
 /* =========================================================
    MOBILE DRAWER
+   HIDDEN ON DESKTOP
 ========================================================= */
 
 .mobile-drawer {
-  display: none;
+  display: none !important;
 }
 
 .mobile-overlay {
-  display: none;
+  display: none !important;
 }
 
 .mobile-close {
@@ -827,6 +832,9 @@ header p {
   font-size: 10px;
 
   margin-top: 3px;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .pair p {
@@ -894,6 +902,7 @@ header p {
   font-size: 12px;
 
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .eval p {
@@ -952,7 +961,7 @@ header p {
 
 
 /* =========================================================
-   DRAWER / FACT INSPECTOR
+   FACT INSPECTOR DRAWER
 ========================================================= */
 
 .drawer {
@@ -1109,10 +1118,36 @@ header p {
 
 
 /* =========================================================
+   DESKTOP OVERRIDE
+   IMPORTANT:
+   Mobile navigation MUST NEVER appear on desktop.
+========================================================= */
+
+@media (min-width: 701px) {
+
+  aside {
+    display: flex !important;
+  }
+
+  .mobile-menu-button {
+    display: none !important;
+  }
+
+  .mobile-drawer {
+    display: none !important;
+  }
+
+  .mobile-overlay {
+    display: none !important;
+  }
+}
+
+
+/* =========================================================
    TABLET
 ========================================================= */
 
-@media (max-width: 1000px) {
+@media (min-width: 701px) and (max-width: 1000px) {
 
   aside {
     width: 205px;
@@ -1131,7 +1166,6 @@ header p {
   .grid {
     grid-template-columns: 1fr;
   }
-
 }
 
 
@@ -1143,19 +1177,19 @@ header p {
 
   /* Hide desktop sidebar */
   aside {
-    display: none;
+    display: none !important;
   }
 
 
   /* Show mobile menu button */
   .mobile-menu-button {
-    display: inline-flex;
+    display: inline-flex !important;
   }
 
 
   /* Mobile drawer */
   .mobile-drawer {
-    display: flex;
+    display: flex !important;
 
     flex-direction: column;
 
@@ -1189,7 +1223,7 @@ header p {
 
   /* Dark overlay */
   .mobile-overlay {
-    display: block;
+    display: block !important;
 
     position: fixed;
 
@@ -1347,7 +1381,6 @@ header p {
 
     padding: 20px 16px;
   }
-
 }
 
 
@@ -1386,5 +1419,4 @@ header p {
   .mobile-drawer {
     width: 86vw;
   }
-
 }
