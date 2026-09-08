@@ -7,34 +7,185 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
+# ============================================================
+# VOCABULARY
+# ============================================================
+
 NEGATIONS = {
-    "not", "no", "never", "none", "without",
-    "didn't", "doesn't", "isn't", "wasn't"
+    "not",
+    "no",
+    "never",
+    "none",
+    "without",
+    "didn't",
+    "doesn't",
+    "isn't",
+    "wasn't",
+    "were not",
+    "was not",
 }
 
 CHANGE_WORDS = {
-    "increased", "decreased", "grew", "declined",
-    "rose", "fell", "reduced", "dropped"
+    "increased",
+    "decreased",
+    "grew",
+    "declined",
+    "rose",
+    "fell",
+    "reduced",
+    "dropped",
+    "growth",
+    "decline",
+    "increase",
 }
 
 STOP_TOKENS = {
-    "the", "and", "for", "from", "with", "that", "this",
-    "were", "was", "are", "has", "have", "had", "into",
-    "than", "then", "their", "there", "about", "during",
-    "through", "under", "over", "year", "years", "period",
-    "ended", "ending", "reported", "according", "estimated",
-    "respectively", "per", "cent", "percent"
+    "the",
+    "and",
+    "for",
+    "from",
+    "with",
+    "that",
+    "this",
+    "were",
+    "was",
+    "are",
+    "has",
+    "have",
+    "had",
+    "into",
+    "than",
+    "then",
+    "their",
+    "there",
+    "about",
+    "during",
+    "through",
+    "under",
+    "over",
+    "year",
+    "years",
+    "period",
+    "ended",
+    "ending",
+    "reported",
+    "according",
+    "estimated",
+    "respectively",
+    "per",
+    "cent",
+    "percent",
+    "from",
+    "its",
+    "our",
+    "also",
+    "more",
+    "less",
+    "approximately",
+    "around",
+}
+
+# Concepts that should be treated as separate numerical topics.
+TOPIC_GROUPS = {
+    "revenue": {
+        "revenue",
+        "revenues",
+        "income",
+        "sales",
+        "turnover",
+        "services",
+        "service",
+    },
+    "gdp": {
+        "gdp",
+        "growth",
+        "economic",
+        "economy",
+        "output",
+    },
+    "employees": {
+        "employee",
+        "employees",
+        "workforce",
+        "workforce",
+        "team",
+        "staff",
+        "headcount",
+    },
+    "mobility": {
+        "mobility",
+        "internal",
+        "role",
+        "roles",
+        "transfer",
+        "transferred",
+        "movement",
+    },
+    "promotion": {
+        "promotion",
+        "promoted",
+        "promotions",
+    },
+    "pin_codes": {
+        "pin",
+        "pincode",
+        "pincodes",
+        "codes",
+        "postal",
+    },
+    "customers": {
+        "customer",
+        "customers",
+        "client",
+        "clients",
+    },
+    "facilities": {
+        "facility",
+        "facilities",
+        "centre",
+        "centres",
+        "center",
+        "centers",
+    },
+    "parcels": {
+        "parcel",
+        "parcels",
+        "shipment",
+        "shipments",
+    },
+    "freight": {
+        "freight",
+        "tonnes",
+        "tons",
+        "ton",
+    },
+    "countries": {
+        "country",
+        "countries",
+    },
 }
 
 
+# ============================================================
+# BASIC HELPERS
+# ============================================================
+
 def safe_json_list(value):
+    """
+    Safely decode JSON arrays stored in SQLite.
+    """
     if not value:
         return []
 
+    if isinstance(value, list):
+        return value
+
     try:
         parsed = json.loads(value)
+
         if isinstance(parsed, list):
             return parsed
+
     except (TypeError, json.JSONDecodeError):
         pass
 
@@ -42,19 +193,29 @@ def safe_json_list(value):
 
 
 def tokens(text):
+    """
+    Tokenize text into lowercase alphanumeric tokens.
+    """
     return set(
         re.findall(
             r"[a-zA-Z][a-zA-Z0-9_-]+",
-            (text or "").lower()
+            (text or "").lower(),
         )
     )
 
 
 def meaningful_tokens(text):
+    """
+    Remove common words so semantic/topic comparison
+    focuses on useful content.
+    """
     return tokens(text) - STOP_TOKENS - NEGATIONS
 
 
 def normalized_entities(fact):
+    """
+    Return normalized entity names.
+    """
     return {
         str(x).strip().lower()
         for x in safe_json_list(fact.get("entities"))
@@ -63,6 +224,9 @@ def normalized_entities(fact):
 
 
 def normalized_dates(fact):
+    """
+    Return normalized extracted dates/periods.
+    """
     return {
         str(x).strip().lower()
         for x in safe_json_list(fact.get("dates"))
@@ -70,12 +234,30 @@ def normalized_dates(fact):
     }
 
 
+def fact_text(fact):
+    return (
+        fact.get("text")
+        or fact.get("evidence")
+        or ""
+    )
+
+
+# ============================================================
+# SEMANTIC SIMILARITY
+# ============================================================
+
 def build_similarity_matrix(facts):
+    """
+    Build one TF-IDF matrix for all facts.
+
+    This is substantially faster than fitting a vectorizer
+    separately for every pair.
+    """
     if not facts:
         return None
 
     texts = [
-        fact.get("text", "") or ""
+        fact_text(fact)
         for fact in facts
     ]
 
@@ -88,247 +270,158 @@ def build_similarity_matrix(facts):
 
     try:
         return vectorizer.fit_transform(texts)
+
     except ValueError:
         return None
 
 
 def similarity_from_matrix(matrix, i, j):
+    if matrix is None:
+        return 0.0
+
     return float(
-        cosine_similarity(matrix[i], matrix[j])[0, 0]
+        cosine_similarity(
+            matrix[i],
+            matrix[j],
+        )[0, 0]
     )
 
 
+# ============================================================
+# NUMERICAL HELPERS
+# ============================================================
+
 def numeric_value(fact):
+    """
+    Use the normalized numeric value generated by the extractor.
+    """
     value = fact.get("normalized_value")
+
+    if value is None:
+        value = fact.get("value")
 
     if value is None:
         return None
 
     try:
         return float(value)
+
     except (TypeError, ValueError):
         return None
 
 
 def unit(fact):
-    return str(
+    value = (
         fact.get("normalized_unit")
         or fact.get("unit")
         or ""
-    ).strip().lower()
-
-
-def text_contains_any(text, words):
-    text = (text or "").lower()
-    return any(word in text for word in words)
-
-
-def fiscal_year_tokens(fact):
-    text = (fact.get("text") or "").lower()
-
-    years = set(
-        re.findall(
-            r"(?:fy\s*)?(20\d{2})(?:[-/](?:20)?\d{2})?",
-            text
-        )
     )
 
-    dates = normalized_dates(fact)
-
-    for item in dates:
-        found = re.findall(r"20\d{2}", item)
-        years.update(found)
-
-    return years
+    return str(value).strip().lower()
 
 
-def period_scope(fact):
+def canonical_unit(value):
     """
-    Classify broad time scope.
-
-    This deliberately uses text + extracted dates because
-    the extractor can miss some temporal structure.
+    Normalize common unit spellings.
     """
-    text = (fact.get("text") or "").lower()
+    value = str(value or "").strip().lower()
 
-    scopes = set()
+    aliases = {
+        "mn": "million",
+        "m": "million",
+        "million": "million",
+        "millions": "million",
+        "₹ million": "million",
+        "rs million": "million",
+        "inr million": "million",
+        "₹mn": "million",
 
-    if re.search(r"\bq[1-4]\b", text):
-        scopes.add("quarter")
+        "cr": "crore",
+        "crore": "crore",
+        "crores": "crore",
+        "₹ crore": "crore",
+        "rs crore": "crore",
+        "inr crore": "crore",
+        "₹cr": "crore",
 
-    if re.search(r"\b(first|second|third|fourth)\s+quarter\b", text):
-        scopes.add("quarter")
-
-    if re.search(r"\bhalf[- ]year\b|\bh1\b|\bh2\b", text):
-        scopes.add("half-year")
-
-    if re.search(r"\bfy\s*20\d{2}\b", text):
-        scopes.add("fiscal-year")
-
-    if re.search(r"\b20\d{2}/\d{2,4}\b", text):
-        scopes.add("fiscal-year")
-
-    if re.search(r"\b20\d{2}\b", text):
-        scopes.add("year")
-
-    return scopes
-
-
-def same_subject_signal(a, b):
-    """
-    Strong subject overlap based on entities and text.
-
-    We do not require exact entity equality because PDF
-    extraction can produce slightly different entity strings.
-    """
-    entities_a = normalized_entities(a)
-    entities_b = normalized_entities(b)
-
-    if entities_a & entities_b:
-        return True
-
-    text_a = meaningful_tokens(a.get("text", ""))
-    text_b = meaningful_tokens(b.get("text", ""))
-
-    shared = text_a & text_b
-
-    important = {
-        "revenue", "services", "growth", "gdp", "employees",
-        "workforce", "pin", "codes", "customers", "facilities",
-        "parcels", "freight", "team", "size", "mobility",
-        "promotion", "promoted"
+        "%": "percent",
+        "percentage": "percent",
+        "percent": "percent",
     }
 
-    return bool(shared & important)
-
-
-def candidate_pairs(facts):
-    """
-    Candidate generation is intentionally broader than the
-    previous implementation.
-
-    Important:
-    ₹ million vs ₹ crore may have different normalized units
-    depending on the extractor, so unit equality cannot be a
-    hard candidate requirement.
-    """
-
-    if not facts:
-        return []
-
-    buckets = defaultdict(set)
-
-    for index, fact in enumerate(facts):
-        entities = normalized_entities(fact)
-        text_tokens = meaningful_tokens(fact.get("text", ""))
-
-        # Entity buckets
-        for entity in entities:
-            buckets[("entity", entity)].add(index)
-
-        # Important domain tokens
-        for token in text_tokens:
-            if len(token) >= 4:
-                buckets[("token", token)].add(index)
-
-        # Time-independent numerical/topic bucket
-        for token in {
-            "revenue", "gdp", "growth", "employees",
-            "workforce", "customers", "facilities",
-            "pin", "codes", "services"
-        }:
-            if token in text_tokens:
-                buckets[("important", token)].add(index)
-
-    pairs = set()
-
-    for group in buckets.values():
-        if len(group) < 2:
-            continue
-
-        # Avoid huge generic buckets.
-        if len(group) > 150:
-            continue
-
-        for i, j in combinations(sorted(group), 2):
-            a = facts[i]
-            b = facts[j]
-
-            if a.get("document_id") == b.get("document_id"):
-                continue
-
-            pairs.add((i, j))
-
-    return list(pairs)
-
-
-def numeric_difference(a, b):
-    av = numeric_value(a)
-    bv = numeric_value(b)
-
-    if av is None or bv is None:
-        return None
-
-    ua = unit(a)
-    ub = unit(b)
-
-    # Same normalized unit.
-    if ua and ub and ua == ub:
-        denominator = max(abs(av), abs(bv), 1e-9)
-        return min(abs(av - bv) / denominator, 1.0)
-
-    return None
+    return aliases.get(value, value)
 
 
 def convert_value(value, from_unit, to_unit):
     """
-    Minimal generic conversion layer for common financial units.
+    Convert common financial units.
 
     1 crore = 10 million.
     """
     if value is None:
         return None
 
+    from_unit = canonical_unit(from_unit)
+    to_unit = canonical_unit(to_unit)
+
+    if not from_unit or not to_unit:
+        return None
+
     if from_unit == to_unit:
         return value
 
-    aliases = {
-        "million": "million",
-        "mn": "million",
-        "₹ million": "million",
-        "inr million": "million",
-        "crore": "crore",
-        "cr": "crore",
-        "₹ crore": "crore",
-        "inr crore": "crore",
-    }
-
-    f = aliases.get(from_unit, from_unit)
-    t = aliases.get(to_unit, to_unit)
-
-    if f == t:
-        return value
-
-    if f == "million" and t == "crore":
+    if from_unit == "million" and to_unit == "crore":
         return value / 10.0
 
-    if f == "crore" and t == "million":
+    if from_unit == "crore" and to_unit == "million":
         return value * 10.0
 
     return None
 
 
+def direct_numeric_difference(a, b):
+    """
+    Compare two values if their canonical units match.
+    """
+    av = numeric_value(a)
+    bv = numeric_value(b)
+
+    if av is None or bv is None:
+        return None
+
+    ua = canonical_unit(unit(a))
+    ub = canonical_unit(unit(b))
+
+    if not ua or not ub or ua != ub:
+        return None
+
+    denominator = max(
+        abs(av),
+        abs(bv),
+        1e-9,
+    )
+
+    return min(
+        abs(av - bv) / denominator,
+        1.0,
+    )
+
+
 def cross_unit_difference(a, b):
     """
-    Compare values even when the extractor retained different
-    financial units.
+    Compare values after converting compatible units.
 
     Example:
+
         81,415 million
         8,142 crore
 
-    81,415 million = 8,141.5 crore.
-    Difference from 8,142 crore is ~0.006%.
+    becomes:
+
+        8,141.5 crore
+        8,142 crore
+
+    Difference ≈ 0.006%.
     """
     av = numeric_value(a)
     bv = numeric_value(b)
@@ -336,127 +429,669 @@ def cross_unit_difference(a, b):
     if av is None or bv is None:
         return None, None
 
-    ua = unit(a)
-    ub = unit(b)
+    ua = canonical_unit(unit(a))
+    ub = canonical_unit(unit(b))
 
-    converted_a = convert_value(av, ua, ub)
+    if not ua or not ub:
+        return None, None
 
-    if converted_a is None:
-        converted_b = convert_value(bv, ub, ua)
-
-        if converted_b is None:
-            return None, None
-
-        denominator = max(abs(av), abs(converted_b), 1e-9)
-        difference = min(
-            abs(av - converted_b) / denominator,
-            1.0
+    if ua == ub:
+        denominator = max(
+            abs(av),
+            abs(bv),
+            1e-9,
         )
 
-        return difference, {
-            "conversion": f"{ub} -> {ua}",
-            "converted_value_b": round(converted_b, 6),
-        }
+        return (
+            min(
+                abs(av - bv) / denominator,
+                1.0,
+            ),
+            None,
+        )
 
-    denominator = max(
-        abs(converted_a),
-        abs(bv),
-        1e-9
+    converted_a = convert_value(
+        av,
+        ua,
+        ub,
     )
 
-    difference = min(
-        abs(converted_a - bv) / denominator,
-        1.0
+    if converted_a is not None:
+        denominator = max(
+            abs(converted_a),
+            abs(bv),
+            1e-9,
+        )
+
+        return (
+            min(
+                abs(converted_a - bv) / denominator,
+                1.0,
+            ),
+            {
+                "conversion": f"{ua} -> {ub}",
+                "converted_value_a": round(
+                    converted_a,
+                    6,
+                ),
+            },
+        )
+
+    converted_b = convert_value(
+        bv,
+        ub,
+        ua,
     )
 
-    return difference, {
-        "conversion": f"{ua} -> {ub}",
-        "converted_value_a": round(converted_a, 6),
-    }
+    if converted_b is not None:
+        denominator = max(
+            abs(av),
+            abs(converted_b),
+            1e-9,
+        )
+
+        return (
+            min(
+                abs(av - converted_b) / denominator,
+                1.0,
+            ),
+            {
+                "conversion": f"{ub} -> {ua}",
+                "converted_value_b": round(
+                    converted_b,
+                    6,
+                ),
+            },
+        )
+
+    return None, None
+
+
+# ============================================================
+# TIME / PERIOD ANALYSIS
+# ============================================================
+
+def period_scope(fact):
+    """
+    Identify broad temporal scope.
+
+    Examples:
+        Q1 FY25        -> quarter
+        Q2 FY25        -> quarter
+        H1 FY25        -> half-year
+        FY2024/25      -> fiscal-year
+        FY25           -> fiscal-year
+        2024           -> year
+    """
+    text = fact_text(fact).lower()
+
+    scopes = set()
+
+    if re.search(
+        r"\bq[1-4]\b",
+        text,
+    ):
+        scopes.add("quarter")
+
+    if re.search(
+        r"\b(first|second|third|fourth)\s+quarter\b",
+        text,
+    ):
+        scopes.add("quarter")
+
+    if re.search(
+        r"\b(?:h1|h2)\b|\bhalf[- ]year\b",
+        text,
+    ):
+        scopes.add("half-year")
+
+    if re.search(
+        r"\bfy\s*20\d{2}(?:/\d{2,4})?\b",
+        text,
+    ):
+        scopes.add("fiscal-year")
+
+    if re.search(
+        r"\b20\d{2}/\d{2,4}\b",
+        text,
+    ):
+        scopes.add("fiscal-year")
+
+    # A plain year should only be added if it wasn't already
+    # classified as a fiscal year.
+    if (
+        "fiscal-year" not in scopes
+        and re.search(r"\b20\d{2}\b", text)
+    ):
+        scopes.add("year")
+
+    return scopes
+
+
+def fiscal_year_tokens(fact):
+    """
+    Extract year identifiers for additional context.
+    """
+    text = fact_text(fact).lower()
+
+    years = set(
+        re.findall(
+            r"20\d{2}",
+            text,
+        )
+    )
+
+    for item in normalized_dates(fact):
+        years.update(
+            re.findall(
+                r"20\d{2}",
+                item,
+            )
+        )
+
+    return years
 
 
 def date_overlap(a, b):
+    """
+    Return:
+        True  -> explicit overlap found
+        False -> explicit dates differ
+        None  -> insufficient temporal information
+    """
     dates_a = normalized_dates(a)
     dates_b = normalized_dates(b)
 
     if not dates_a or not dates_b:
         return None
 
-    return bool(dates_a & dates_b)
-
-
-def different_time_scope(a, b):
-    scope_a = period_scope(a)
-    scope_b = period_scope(b)
-
-    # Explicitly different scopes.
-    if scope_a and scope_b and scope_a != scope_b:
+    if dates_a & dates_b:
         return True
 
-    text_a = (a.get("text") or "").lower()
-    text_b = (b.get("text") or "").lower()
+    years_a = fiscal_year_tokens(a)
+    years_b = fiscal_year_tokens(b)
 
-    # Quarter vs annual/fiscal-year.
-    quarter_a = bool(re.search(r"\bq[1-4]\b", text_a))
-    quarter_b = bool(re.search(r"\bq[1-4]\b", text_b))
-
-    annual_a = bool(
-        re.search(r"\bfy\s*20\d{2}\b|\b20\d{2}/\d{2,4}\b", text_a)
-    )
-    annual_b = bool(
-        re.search(r"\bfy\s*20\d{2}\b|\b20\d{2}/\d{2,4}\b", text_b)
-    )
-
-    if (quarter_a and annual_b) or (quarter_b and annual_a):
-        return True
-
-    # Half-year vs annual.
-    half_a = bool(re.search(r"\bh1\b|\bh2\b|half[- ]year", text_a))
-    half_b = bool(re.search(r"\bh1\b|\bh2\b|half[- ]year", text_b))
-
-    if (half_a and annual_b) or (half_b and annual_a):
+    if years_a & years_b:
         return True
 
     return False
 
 
-def relationship(a, b, sem=None):
-    if sem is None:
-        matrix = build_similarity_matrix([a, b])
+def different_time_scope(a, b):
+    """
+    Detect when two facts measure different temporal scopes.
 
-        if matrix is None:
-            sem = 0.0
-        else:
-            sem = similarity_from_matrix(matrix, 0, 1)
+    This is critical for:
+        Q1 vs FY
+        Q2 vs FY
+        H1 vs FY
+    """
+    text_a = fact_text(a).lower()
+    text_b = fact_text(b).lower()
+
+    scope_a = period_scope(a)
+    scope_b = period_scope(b)
+
+    # Explicit quarter vs annual.
+    quarter_a = bool(
+        re.search(r"\bq[1-4]\b", text_a)
+    )
+
+    quarter_b = bool(
+        re.search(r"\bq[1-4]\b", text_b)
+    )
+
+    annual_a = bool(
+        re.search(
+            r"\bfy\s*20\d{2}(?:/\d{2,4})?\b"
+            r"|\b20\d{2}/\d{2,4}\b",
+            text_a,
+        )
+    )
+
+    annual_b = bool(
+        re.search(
+            r"\bfy\s*20\d{2}(?:/\d{2,4})?\b"
+            r"|\b20\d{2}/\d{2,4}\b",
+            text_b,
+        )
+    )
+
+    if (
+        (quarter_a and annual_b)
+        or
+        (quarter_b and annual_a)
+    ):
+        return True
+
+    # Half-year vs annual.
+    half_a = bool(
+        re.search(
+            r"\b(?:h1|h2)\b|half[- ]year",
+            text_a,
+        )
+    )
+
+    half_b = bool(
+        re.search(
+            r"\b(?:h1|h2)\b|half[- ]year",
+            text_b,
+        )
+    )
+
+    if (
+        (half_a and annual_b)
+        or
+        (half_b and annual_a)
+    ):
+        return True
+
+    # If both scopes exist and are explicitly different.
+    if (
+        scope_a
+        and scope_b
+        and scope_a != scope_b
+    ):
+        return True
+
+    return False
+
+
+# ============================================================
+# TOPIC / PREDICATE ANALYSIS
+# ============================================================
+
+def topic_signatures(fact):
+    """
+    Determine the semantic topic of a fact.
+
+    This prevents:
+
+        1,509 employees moved internally
+        423 employees were promoted
+
+    from being treated as a numerical contradiction.
+
+    Both mention employees, but they belong to different
+    topic groups: mobility vs promotion.
+    """
+    text_tokens = meaningful_tokens(
+        fact_text(fact)
+    )
+
+    topics = set()
+
+    for topic, vocabulary in TOPIC_GROUPS.items():
+
+        if text_tokens & vocabulary:
+            topics.add(topic)
+
+    predicate = str(
+        fact.get("predicate")
+        or ""
+    ).lower()
+
+    if "mobility" in predicate:
+        topics.add("mobility")
+
+    if "promotion" in predicate:
+        topics.add("promotion")
+
+    if "revenue" in predicate:
+        topics.add("revenue")
+
+    if "gdp" in predicate:
+        topics.add("gdp")
+
+    return topics
+
+
+def topics_compatible(a, b):
+    """
+    Decide whether two facts describe the same measurable topic.
+
+    Returns:
+        True   -> compatible/same topic
+        False  -> clearly different topics
+        None   -> uncertain
+    """
+    topics_a = topic_signatures(a)
+    topics_b = topic_signatures(b)
+
+    if not topics_a or not topics_b:
+        return None
+
+    # Explicitly different concepts.
+    incompatible_pairs = {
+        frozenset({"mobility", "promotion"}),
+        frozenset({"mobility", "revenue"}),
+        frozenset({"promotion", "revenue"}),
+        frozenset({"customers", "employees"}),
+        frozenset({"facilities", "employees"}),
+        frozenset({"parcels", "employees"}),
+        frozenset({"freight", "employees"}),
+    }
+
+    for ta in topics_a:
+        for tb in topics_b:
+
+            if frozenset({ta, tb}) in incompatible_pairs:
+                return False
+
+    # Shared topic.
+    if topics_a & topics_b:
+        return True
+
+    # Different explicit topics.
+    if len(topics_a) == 1 and len(topics_b) == 1:
+        return False
+
+    return None
+
+
+def same_subject_signal(a, b):
+    """
+    Determine whether two facts plausibly refer to the same subject.
+    """
+    entities_a = normalized_entities(a)
+    entities_b = normalized_entities(b)
+
+    if entities_a & entities_b:
+        return True
+
+    topic_result = topics_compatible(a, b)
+
+    if topic_result is True:
+        return True
+
+    text_a = meaningful_tokens(
+        fact_text(a)
+    )
+
+    text_b = meaningful_tokens(
+        fact_text(b)
+    )
+
+    shared = text_a & text_b
+
+    important = {
+        "revenue",
+        "revenues",
+        "services",
+        "gdp",
+        "growth",
+        "employees",
+        "workforce",
+        "pin",
+        "codes",
+        "customers",
+        "facilities",
+        "parcels",
+        "freight",
+        "mobility",
+        "promotion",
+        "promoted",
+    }
+
+    return bool(
+        shared & important
+    )
+
+
+# ============================================================
+# CANDIDATE GENERATION
+# ============================================================
+
+def candidate_pairs(facts):
+    """
+    Generate plausible cross-document pairs.
+
+    We intentionally do NOT require identical units because
+    units such as million and crore may differ.
+
+    We also avoid comparing facts from the same document.
+    """
+    if not facts:
+        return []
+
+    buckets = defaultdict(set)
+
+    for index, fact in enumerate(facts):
+
+        entities = normalized_entities(fact)
+
+        text_tokens = meaningful_tokens(
+            fact_text(fact)
+        )
+
+        topics = topic_signatures(fact)
+
+        # Entity buckets.
+        for entity in entities:
+            buckets[
+                ("entity", entity)
+            ].add(index)
+
+        # Topic buckets.
+        for topic in topics:
+            buckets[
+                ("topic", topic)
+            ].add(index)
+
+        # Useful lexical buckets.
+        for token in text_tokens:
+
+            if len(token) >= 4:
+                buckets[
+                    ("token", token)
+                ].add(index)
+
+    pairs = set()
+
+    for group in buckets.values():
+
+        if len(group) < 2:
+            continue
+
+        # Avoid pathological generic buckets.
+        if len(group) > 200:
+            continue
+
+        for i, j in combinations(
+            sorted(group),
+            2,
+        ):
+
+            a = facts[i]
+            b = facts[j]
+
+            # Never create cross-fact relationships inside
+            # the same source document.
+            if (
+                a.get("document_id")
+                ==
+                b.get("document_id")
+            ):
+                continue
+
+            pairs.add(
+                (i, j)
+            )
+
+    return list(pairs)
+
+
+# ============================================================
+# SEMANTIC CONTRADICTION HELPERS
+# ============================================================
+
+def contains_negation(text):
+    text = (text or "").lower()
+
+    for negation in NEGATIONS:
+
+        if negation in text:
+            return True
+
+    return False
+
+
+def change_direction(text):
+    """
+    Return:
+        positive
+        negative
+        None
+    """
+    text = (text or "").lower()
+
+    positive = {
+        "increased",
+        "grew",
+        "rose",
+        "growth",
+        "increase",
+        "higher",
+    }
+
+    negative = {
+        "decreased",
+        "declined",
+        "fell",
+        "reduced",
+        "dropped",
+        "decline",
+        "decrease",
+        "lower",
+    }
+
+    has_positive = any(
+        word in text
+        for word in positive
+    )
+
+    has_negative = any(
+        word in text
+        for word in negative
+    )
+
+    if has_positive and not has_negative:
+        return "positive"
+
+    if has_negative and not has_positive:
+        return "negative"
+
+    return None
+
+
+# ============================================================
+# RELATIONSHIP CLASSIFICATION
+# ============================================================
+
+def relationship(a, b, sem=None):
+    """
+    Classify one pair of facts.
+
+    Possible relations:
+
+        CORROBORATES
+        CONTRADICTS
+        RECONCILES
+        RELATED
+        UNRELATED
+    """
+
+    if sem is None:
+
+        matrix = build_similarity_matrix(
+            [a, b]
+        )
+
+        sem = (
+            similarity_from_matrix(
+                matrix,
+                0,
+                1,
+            )
+            if matrix is not None
+            else 0.0
+        )
 
     entities_a = normalized_entities(a)
     entities_b = normalized_entities(b)
 
-    entity_overlap = len(
+    entity_intersection = (
         entities_a & entities_b
-    ) / max(
-        1,
-        len(entities_a | entities_b)
+    )
+
+    entity_union = (
+        entities_a | entities_b
+    )
+
+    entity_overlap = (
+        len(entity_intersection)
+        /
+        max(
+            1,
+            len(entity_union),
+        )
+    )
+
+    tokens_a = meaningful_tokens(
+        fact_text(a)
+    )
+
+    tokens_b = meaningful_tokens(
+        fact_text(b)
     )
 
     common_tokens = (
-        meaningful_tokens(a.get("text", ""))
-        &
-        meaningful_tokens(b.get("text", ""))
+        tokens_a & tokens_b
     )
 
-    meaningful_overlap = len(common_tokens)
+    meaningful_overlap = len(
+        common_tokens
+    )
 
-    subject_signal = same_subject_signal(a, b)
+    subject_signal = same_subject_signal(
+        a,
+        b,
+    )
+
+    topic_result = topics_compatible(
+        a,
+        b,
+    )
+
+    time_scope_diff = different_time_scope(
+        a,
+        b,
+    )
+
+    dates_overlap = date_overlap(
+        a,
+        b,
+    )
 
     same_unit = (
         bool(unit(a))
         and bool(unit(b))
-        and unit(a) == unit(b)
+        and canonical_unit(unit(a))
+        ==
+        canonical_unit(unit(b))
     )
 
-    direct_difference = numeric_difference(a, b)
-    converted_difference, conversion_info = cross_unit_difference(a, b)
+    direct_difference = direct_numeric_difference(
+        a,
+        b,
+    )
+
+    converted_difference, conversion_info = (
+        cross_unit_difference(
+            a,
+            b,
+        )
+    )
 
     numeric_diff = (
         direct_difference
@@ -464,151 +1099,347 @@ def relationship(a, b, sem=None):
         else converted_difference
     )
 
-    dates_overlap = date_overlap(a, b)
-    time_scope_diff = different_time_scope(a, b)
+    # --------------------------------------------------------
+    # Base score
+    # --------------------------------------------------------
 
-    # Entity + semantic + meaningful words.
     score = (
-        0.45 * sem
-        + 0.25 * entity_overlap
-        + 0.15 * min(meaningful_overlap / 6.0, 1.0)
-        + 0.15 * (1.0 if subject_signal else 0.0)
+        0.40 * sem
+        + 0.20 * entity_overlap
+        + 0.15 * min(
+            meaningful_overlap / 6.0,
+            1.0,
+        )
+        + 0.15 * (
+            1.0
+            if subject_signal
+            else 0.0
+        )
+        + 0.10 * (
+            1.0
+            if topic_result is True
+            else 0.0
+        )
     )
 
     signals = {
-        "semantic_similarity": round(sem, 3),
-        "entity_overlap": round(entity_overlap, 3),
-        "meaningful_token_overlap": meaningful_overlap,
-        "subject_signal": subject_signal,
-        "normalized_unit_match": same_unit,
+        "semantic_similarity": round(
+            sem,
+            3,
+        ),
+
+        "entity_overlap": round(
+            entity_overlap,
+            3,
+        ),
+
+        "shared_entities": sorted(
+            entity_intersection
+        ),
+
+        "meaningful_token_overlap": (
+            meaningful_overlap
+        ),
+
+        "shared_tokens": sorted(
+            common_tokens
+        )[:20],
+
+        "subject_signal": (
+            subject_signal
+        ),
+
+        "topic_a": sorted(
+            topic_signatures(a)
+        ),
+
+        "topic_b": sorted(
+            topic_signatures(b)
+        ),
+
+        "topics_compatible": (
+            topic_result
+        ),
+
+        "normalized_unit_match": (
+            same_unit
+        ),
+
+        "unit_a": canonical_unit(
+            unit(a)
+        ),
+
+        "unit_b": canonical_unit(
+            unit(b)
+        ),
+
         "relative_numeric_difference": (
             None
             if numeric_diff is None
-            else round(numeric_diff, 5)
+            else round(
+                numeric_diff,
+                6,
+            )
         ),
-        "date_overlap": dates_overlap,
-        "different_time_scope": time_scope_diff,
-        "unit_conversion": conversion_info,
+
+        "date_overlap": (
+            dates_overlap
+        ),
+
+        "different_time_scope": (
+            time_scope_diff
+        ),
+
+        "conversion": (
+            conversion_info
+        ),
     }
 
-    # ---------------------------------------------------------
-    # Numerical relationships
-    # ---------------------------------------------------------
+    # ========================================================
+    # IMPORTANT SAFETY RULE
+    # ========================================================
+    #
+    # If two numerical facts clearly describe different
+    # semantic topics, DO NOT call them contradictions.
+    #
+    # This handles the required failure case:
+    #
+    # 1,509 internal mobility
+    # 423 promotions
+    #
+    # Both concern employees, but they measure different things.
+    # ========================================================
+
+    if (
+        numeric_diff is not None
+        and topic_result is False
+    ):
+
+        return (
+            "RELATED",
+            min(
+                score,
+                0.49,
+            ),
+            (
+                "The statements contain numerical values and "
+                "share some broad subject context, but they "
+                "measure different semantic topics. They are "
+                "therefore not treated as a contradiction."
+            ),
+            signals,
+        )
+
+    # ========================================================
+    # NUMERICAL RELATIONSHIPS
+    # ========================================================
 
     if numeric_diff is not None:
 
-        # Same scope + near-identical value.
-        if numeric_diff <= 0.02 and not time_scope_diff:
-            conversion_text = ""
+        # ----------------------------------------------------
+        # CORROBORATION
+        # ----------------------------------------------------
+        #
+        # Near identical values after unit normalization.
+        # Example:
+        #
+        # 81,415 million
+        # 8,142 crore
+        #
+        # 81,415 / 10 = 8,141.5 crore
+        #
+        # Difference is ~0.006%.
+        # ----------------------------------------------------
+
+        if (
+            numeric_diff <= 0.02
+            and not time_scope_diff
+            and (
+                topic_result is not False
+            )
+        ):
 
             if conversion_info:
+
                 conversion_text = (
-                    f" Unit conversion was applied "
-                    f"({conversion_info['conversion']})."
+                    " Unit conversion was applied: "
+                    f"{conversion_info['conversion']}."
                 )
+
+            else:
+
+                conversion_text = ""
 
             return (
                 "CORROBORATES",
-                max(score, 0.75),
+                max(
+                    score,
+                    0.75,
+                ),
                 (
-                    "The statements describe the same measurable "
-                    "fact and their values agree after normalization"
+                    "The statements describe the same "
+                    "measurable fact and their values agree "
+                    "after normalization."
                     f"{conversion_text} "
-                    "The small remaining difference is consistent "
-                    "with rounding/display precision."
+                    "The remaining difference is small enough "
+                    "to be explained by rounding or display "
+                    "precision."
                 ),
                 signals,
             )
 
-        # Different scopes should not be called contradiction.
-        if time_scope_diff:
+        # ----------------------------------------------------
+        # CONTEXTUAL RECONCILIATION
+        # ----------------------------------------------------
+        #
+        # Different scopes such as:
+        #
+        # Q1 6.7%
+        # Q2 5.4%
+        # FY25 6.4%
+        #
+        # should not be called contradictions.
+        # ----------------------------------------------------
+
+        if (
+            time_scope_diff
+            and topic_result is not False
+        ):
+
             return (
                 "RECONCILES",
-                max(score, 0.60),
+                max(
+                    score,
+                    0.60,
+                ),
                 (
-                    "The measurements differ because the statements "
-                    "refer to different time scopes or reporting "
-                    "periods. They are therefore contextual rather "
-                    "than directly contradictory."
+                    "The numerical values refer to different "
+                    "time scopes or reporting periods. They "
+                    "therefore describe different measurements "
+                    "rather than directly conflicting claims."
                 ),
                 signals,
             )
 
-        # Small but non-trivial difference.
+        # ----------------------------------------------------
+        # SMALL DIFFERENCE
+        # ----------------------------------------------------
+
         if numeric_diff < 0.10:
+
             return (
                 "RELATED",
                 score,
                 (
-                    "The statements concern a similar measurable "
-                    "fact, but the numerical difference is not large "
-                    "enough to establish a contradiction and not "
-                    "small enough to confidently call corroboration."
+                    "The statements concern a similar "
+                    "measurable fact, but the numerical "
+                    "difference is too large for confident "
+                    "corroboration and too small to establish "
+                    "a strong contradiction."
                 ),
                 signals,
             )
 
-        # Material difference.
-        if numeric_diff >= 0.10:
+        # ----------------------------------------------------
+        # MATERIAL DIFFERENCE
+        # ----------------------------------------------------
+
+        if (
+            numeric_diff >= 0.10
+            and topic_result is not False
+        ):
+
             return (
                 "CONTRADICTS",
-                max(score, 0.55),
+                max(
+                    score,
+                    0.55,
+                ),
                 (
-                    "The statements appear to describe the same "
-                    "measurable fact in comparable units, but their "
+                    "The statements appear to describe the "
+                    "same measurable topic in comparable "
+                    "units and reporting scope, but their "
                     "normalized values differ materially."
                 ),
                 signals,
             )
 
-    # ---------------------------------------------------------
-    # Semantic relationships
-    # ---------------------------------------------------------
+    # ========================================================
+    # SEMANTIC RELATIONSHIPS
+    # ========================================================
 
-    tokens_a = tokens(a.get("text", ""))
-    tokens_b = tokens(b.get("text", ""))
+    neg_a = contains_negation(
+        fact_text(a)
+    )
 
-    neg_a = bool(tokens_a & NEGATIONS)
-    neg_b = bool(tokens_b & NEGATIONS)
+    neg_b = contains_negation(
+        fact_text(b)
+    )
 
-    change_a = tokens_a & CHANGE_WORDS
-    change_b = tokens_b & CHANGE_WORDS
+    # Opposite polarity.
+    if (
+        sem >= 0.70
+        and neg_a != neg_b
+        and topic_result is not False
+    ):
 
-    if sem >= 0.70 and neg_a != neg_b:
         return (
             "CONTRADICTS",
-            max(score, 0.55),
+            max(
+                score,
+                0.55,
+            ),
             (
-                "The statements are semantically similar but "
-                "assert opposite polarity through negation."
+                "The statements are semantically similar "
+                "but assert opposite polarity through "
+                "negation."
             ),
             signals,
         )
+
+    direction_a = change_direction(
+        fact_text(a)
+    )
+
+    direction_b = change_direction(
+        fact_text(b)
+    )
 
     if (
         sem >= 0.72
-        and change_a
-        and change_b
-        and change_a != change_b
+        and direction_a
+        and direction_b
+        and direction_a != direction_b
+        and topic_result is not False
     ):
+
         return (
             "CONTRADICTS",
-            max(score, 0.55),
+            max(
+                score,
+                0.55,
+            ),
             (
-                "The statements describe the same topic but "
-                "assert opposing change directions."
+                "The statements describe the same topic "
+                "but assert opposing directions of change."
             ),
             signals,
         )
 
+    # --------------------------------------------------------
+    # Related semantic facts.
+    # --------------------------------------------------------
+
     if score >= 0.45:
+
         return (
             "RELATED",
             score,
             (
-                "The statements are sufficiently related to "
-                "inspect together, but the available evidence "
-                "does not justify a stronger relationship."
+                "The statements are sufficiently related "
+                "to inspect together, but the available "
+                "evidence does not justify a stronger "
+                "relationship."
             ),
             signals,
         )
@@ -624,16 +1455,39 @@ def relationship(a, b, sem=None):
     )
 
 
+# ============================================================
+# COMPARE ALL FACTS
+# ============================================================
+
 def compare_facts(facts):
+    """
+    Compare extracted facts across documents.
+
+    Returns tuples:
+
+        (
+            fact_a_id,
+            fact_b_id,
+            relation,
+            score,
+            explanation,
+            signals_json
+        )
+    """
+
     if not facts:
         return []
 
-    candidates = candidate_pairs(facts)
+    candidates = candidate_pairs(
+        facts
+    )
 
     if not candidates:
         return []
 
-    matrix = build_similarity_matrix(facts)
+    matrix = build_similarity_matrix(
+        facts
+    )
 
     if matrix is None:
         return []
@@ -641,69 +1495,135 @@ def compare_facts(facts):
     results = []
 
     for i, j in candidates:
+
         a = facts[i]
         b = facts[j]
 
         sem = similarity_from_matrix(
             matrix,
             i,
-            j
+            j,
         )
 
-        entities_a = normalized_entities(a)
-        entities_b = normalized_entities(b)
+        entities_a = normalized_entities(
+            a
+        )
+
+        entities_b = normalized_entities(
+            b
+        )
 
         common_tokens = (
-            meaningful_tokens(a.get("text", ""))
+            meaningful_tokens(
+                fact_text(a)
+            )
             &
-            meaningful_tokens(b.get("text", ""))
+            meaningful_tokens(
+                fact_text(b)
+            )
         )
 
-        # Keep numerical facts even when text similarity is weak.
         has_numbers = (
             numeric_value(a) is not None
-            and numeric_value(b) is not None
+            and
+            numeric_value(b) is not None
         )
 
-        has_subject_signal = same_subject_signal(a, b)
+        has_subject_signal = (
+            same_subject_signal(
+                a,
+                b,
+            )
+        )
+
+        topic_result = topics_compatible(
+            a,
+            b,
+        )
+
+        # ----------------------------------------------------
+        # Reject obviously unrelated semantic pairs.
+        # ----------------------------------------------------
 
         if (
             sem < 0.12
-            and not (entities_a & entities_b)
+            and not (
+                entities_a
+                &
+                entities_b
+            )
             and len(common_tokens) < 2
             and not has_subject_signal
             and not has_numbers
         ):
             continue
 
-        relation_name, score, explanation, signals = relationship(
-            a,
-            b,
-            sem=sem
+        relation_name, score, explanation, signals = (
+            relationship(
+                a,
+                b,
+                sem=sem,
+            )
         )
 
         if relation_name == "UNRELATED":
             continue
 
-        # Strong benchmark relationships must survive even
-        # when semantic similarity is not perfect.
-        if (
-            relation_name in {
-                "CORROBORATES",
-                "CONTRADICTS",
-                "RECONCILES",
-            }
-            or score >= 0.42
-        ):
+        # ----------------------------------------------------
+        # Strong relations are always retained.
+        # ----------------------------------------------------
+
+        if relation_name in {
+            "CORROBORATES",
+            "CONTRADICTS",
+            "RECONCILES",
+        }:
+
             results.append(
                 (
                     a["id"],
                     b["id"],
                     relation_name,
-                    round(score, 4),
+                    round(
+                        score,
+                        4,
+                    ),
                     explanation,
-                    json.dumps(signals),
+                    json.dumps(
+                        signals
+                    ),
                 )
             )
+
+            continue
+
+        # ----------------------------------------------------
+        # Keep useful RELATED relationships, but don't flood
+        # the UI with weak relationships.
+        # ----------------------------------------------------
+
+        if score >= 0.45:
+
+            results.append(
+                (
+                    a["id"],
+                    b["id"],
+                    relation_name,
+                    round(
+                        score,
+                        4,
+                    ),
+                    explanation,
+                    json.dumps(
+                        signals
+                    ),
+                )
+            )
+
+    # Highest-confidence relationships first.
+    results.sort(
+        key=lambda x: x[3],
+        reverse=True,
+    )
 
     return results
