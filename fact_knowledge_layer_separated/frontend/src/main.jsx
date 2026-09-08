@@ -47,7 +47,6 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(null);
 
-  // Mobile menu state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const nav = [
@@ -86,8 +85,8 @@ function App() {
 
     const fd = new FormData();
 
-    [...e.target.files].forEach((f) => {
-      fd.append('files', f);
+    [...e.target.files].forEach((file) => {
+      fd.append('files', file);
     });
 
     try {
@@ -100,10 +99,13 @@ function App() {
 
       setTab('Documents');
       setMobileMenuOpen(false);
-    } catch (x) {
-      alert(x.message);
+    } catch (error) {
+      alert(error.message);
     } finally {
       setBusy(false);
+
+      // Allow selecting the same file again later.
+      e.target.value = '';
     }
   };
 
@@ -113,12 +115,17 @@ function App() {
         'Delete all local documents, facts and relationships?'
       )
     ) {
-      await api('/api/reset', {
-        method: 'DELETE'
-      });
+      try {
+        await api('/api/reset', {
+          method: 'DELETE'
+        });
 
-      await load();
-      setMobileMenuOpen(false);
+        await load();
+        setSelected(null);
+        setMobileMenuOpen(false);
+      } catch (error) {
+        alert(error.message);
+      }
     }
   };
 
@@ -134,9 +141,13 @@ function App() {
 
   const filteredFacts = facts.filter((x) =>
     (
-      x.text +
-      x.filename +
-      x.evidence
+      (x.text || '') +
+      (x.filename || '') +
+      (x.evidence || '') +
+      (x.subject || '') +
+      (x.predicate || '') +
+      (x.value ?? '') +
+      (x.unit || '')
     )
       .toLowerCase()
       .includes(q.toLowerCase())
@@ -161,11 +172,7 @@ function App() {
 
         {nav.map((n) => (
           <button
-            className={
-              tab === n
-                ? 'nav active'
-                : 'nav'
-            }
+            className={tab === n ? 'nav active' : 'nav'}
             onClick={() => changeTab(n)}
             key={n}
           >
@@ -214,9 +221,7 @@ function App() {
       {mobileMenuOpen && (
         <div
           className="mobile-overlay"
-          onClick={() =>
-            setMobileMenuOpen(false)
-          }
+          onClick={() => setMobileMenuOpen(false)}
         />
       )}
 
@@ -246,9 +251,7 @@ function App() {
 
           <button
             className="mobile-close"
-            onClick={() =>
-              setMobileMenuOpen(false)
-            }
+            onClick={() => setMobileMenuOpen(false)}
             aria-label="Close menu"
           >
             <X size={22} />
@@ -256,18 +259,11 @@ function App() {
 
         </div>
 
-
-        {/* Mobile navigation */}
-
         <div className="mobile-nav">
 
           {nav.map((n) => (
             <button
-              className={
-                tab === n
-                  ? 'nav active'
-                  : 'nav'
-              }
+              className={tab === n ? 'nav active' : 'nav'}
               onClick={() => changeTab(n)}
               key={n}
             >
@@ -288,9 +284,6 @@ function App() {
           ))}
 
         </div>
-
-
-        {/* Mobile bottom actions */}
 
         <div className="sideBottom">
 
@@ -325,9 +318,7 @@ function App() {
 
         <button
           className="mobile-menu-button"
-          onClick={() =>
-            setMobileMenuOpen(true)
-          }
+          onClick={() => setMobileMenuOpen(true)}
           aria-label="Open menu"
         >
           <Menu size={21} />
@@ -354,9 +345,7 @@ function App() {
 
             <Upload />
 
-            {busy
-              ? 'Processing…'
-              : 'Upload PDFs'}
+            {busy ? 'Processing…' : 'Upload PDFs'}
 
             <input
               type="file"
@@ -403,7 +392,6 @@ function App() {
               />
 
             </div>
-
 
             <div className="grid">
 
@@ -481,13 +469,10 @@ function App() {
               <input
                 placeholder="Search facts…"
                 value={q}
-                onChange={(e) =>
-                  setQ(e.target.value)
-                }
+                onChange={(e) => setQ(e.target.value)}
               />
 
             </div>
-
 
             {filteredFacts.length === 0 ? (
               <div className="empty">
@@ -500,9 +485,7 @@ function App() {
                   <Fact
                     key={f.id}
                     f={f}
-                    onClick={() =>
-                      setSelected(f)
-                    }
+                    onClick={() => setSelected(f)}
                   />
                 ))
             )}
@@ -547,14 +530,12 @@ function App() {
         ================================================== */}
 
         {tab === 'Evaluation' && (
-          <Evaluation
-            rels={rels}
-          />
+          <Evaluation rels={rels} />
         )}
 
 
         {/* =================================================
-            FACT INSPECTOR DRAWER
+            FACT INSPECTOR
         ================================================== */}
 
         {selected && (
@@ -562,9 +543,8 @@ function App() {
 
             <button
               className="close"
-              onClick={() =>
-                setSelected(null)
-              }
+              onClick={() => setSelected(null)}
+              aria-label="Close fact inspector"
             >
               ×
             </button>
@@ -573,10 +553,8 @@ function App() {
               Fact Inspector
             </h2>
 
-            <Badge
-              type={selected.fact_type}
-            >
-              {selected.fact_type}
+            <Badge type={selected.fact_type}>
+              {selected.fact_type || 'fact'}
             </Badge>
 
             <h3>
@@ -589,40 +567,136 @@ function App() {
               page {selected.page}
             </p>
 
+
+            {/* Structured fact information */}
+
+            <div className="fact-details">
+
+              <div>
+                <span>Subject</span>
+                <strong>
+                  {selected.subject || '—'}
+                </strong>
+              </div>
+
+              <div>
+                <span>Predicate</span>
+                <strong>
+                  {selected.predicate || '—'}
+                </strong>
+              </div>
+
+              <div>
+                <span>Value</span>
+                <strong>
+                  {selected.value !== null &&
+                  selected.value !== undefined &&
+                  selected.value !== ''
+                    ? selected.value
+                    : '—'}
+                </strong>
+              </div>
+
+              <div>
+                <span>Unit</span>
+                <strong>
+                  {selected.unit || '—'}
+                </strong>
+              </div>
+
+            </div>
+
+
+            {/* Evidence */}
+
             <div className="evidence">
 
               <b>
-                Evidence
+                Source Evidence
               </b>
 
               <p>
-                {selected.evidence}
+                {selected.evidence || selected.text}
               </p>
 
             </div>
+
+
+            {/* Metadata */}
 
             <div className="meta">
 
               <span>
                 Confidence{' '}
-                {(selected.confidence * 100).toFixed(0)}%
+                {typeof selected.confidence === 'number'
+                  ? `${(selected.confidence * 100).toFixed(0)}%`
+                  : '—'}
               </span>
 
               <span>
                 Normalized{' '}
-                {selected.normalized_value || '—'}
+                {selected.normalized_value !== null &&
+                selected.normalized_value !== undefined &&
+                selected.normalized_value !== ''
+                  ? selected.normalized_value
+                  : '—'}
                 {' '}
                 {selected.normalized_unit || ''}
               </span>
 
             </div>
 
+
+            {/* Dates */}
+
+            {selected.dates &&
+              selected.dates.length > 0 && (
+                <div className="inspector-section">
+
+                  <b>
+                    Time / Date Context
+                  </b>
+
+                  <p>
+                    {Array.isArray(selected.dates)
+                      ? selected.dates.join(', ')
+                      : selected.dates}
+                  </p>
+
+                </div>
+              )}
+
+
+            {/* Entities */}
+
+            {selected.entities &&
+              selected.entities.length > 0 && (
+                <div className="inspector-section">
+
+                  <b>
+                    Entities
+                  </b>
+
+                  <p>
+                    {Array.isArray(selected.entities)
+                      ? selected.entities.join(', ')
+                      : selected.entities}
+                  </p>
+
+                </div>
+              )}
+
+
+            {/* Warnings */}
+
             {selected.warnings?.length > 0 && (
               <div className="warning">
 
                 <AlertTriangle />
 
-                {selected.warnings.join('; ')}
+                <span>
+                  {selected.warnings.join('; ')}
+                </span>
 
               </div>
             )}
@@ -718,8 +792,13 @@ function DocTable({ docs }) {
               </span>
 
 
+              {/* FIX:
+                  Backend uses page_count.
+                  Fallback to pages for compatibility.
+              */}
+
               <span>
-                {d.pages}
+                {d.page_count ?? d.pages ?? 0}
               </span>
 
 
@@ -736,6 +815,7 @@ function DocTable({ docs }) {
           ))}
 
         </>
+
       ) : (
 
         <div className="empty">
@@ -756,6 +836,13 @@ function DocTable({ docs }) {
 
 function Fact({ f, onClick }) {
 
+  const value =
+    f.value !== null &&
+    f.value !== undefined &&
+    f.value !== ''
+      ? `${f.value}${f.unit ? ` ${f.unit}` : ''}`
+      : null;
+
   return (
     <article
       className="fact"
@@ -765,7 +852,7 @@ function Fact({ f, onClick }) {
       <div>
 
         <Badge>
-          {f.fact_type}
+          {f.fact_type || 'fact'}
         </Badge>
 
         <span className="muted">
@@ -788,12 +875,30 @@ function Fact({ f, onClick }) {
 
 
       <small>
+        {value ? (
+          <>
+            Value: {value}
+            {' · '}
+          </>
+        ) : (
+          <>
+            Semantic fact
+            {' · '}
+          </>
+        )}
+
         Confidence{' '}
-        {(f.confidence * 100).toFixed(0)}%
+        {typeof f.confidence === 'number'
+          ? `${(f.confidence * 100).toFixed(0)}%`
+          : '—'}
+
         {' · '}
-        {f.normalized_value || 'not normalized'}
-        {' '}
-        {f.normalized_unit || ''}
+
+        {f.normalized_value !== null &&
+        f.normalized_value !== undefined &&
+        f.normalized_value !== ''
+          ? `Normalized: ${f.normalized_value} ${f.normalized_unit || ''}`
+          : 'not normalized'}
       </small>
 
 
@@ -820,7 +925,9 @@ function Rel({ r, detailed }) {
         </Badge>
 
         <span>
-          {(r.score * 100).toFixed(0)}% match
+          {typeof r.score === 'number'
+            ? `${(r.score * 100).toFixed(0)}% match`
+            : '—'}
         </span>
 
       </div>
