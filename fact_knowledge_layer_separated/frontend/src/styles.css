@@ -44,7 +44,6 @@ button {
 
 /* =========================================================
    APP
-   Fixed viewport with independent children scrolling
 ========================================================= */
 
 .app {
@@ -60,7 +59,6 @@ button {
 
 /* =========================================================
    DESKTOP SIDEBAR
-   INDEPENDENT SCROLL
 ========================================================= */
 
 aside {
@@ -90,11 +88,6 @@ aside {
 
   scrollbar-width: thin;
 }
-
-
-/* =========================================================
-   SIDEBAR SCROLLBAR
-========================================================= */
 
 aside::-webkit-scrollbar {
   width: 7px;
@@ -198,6 +191,10 @@ aside::-webkit-scrollbar-thumb:hover {
   cursor: pointer;
 
   text-align: left;
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .nav svg {
@@ -232,7 +229,6 @@ aside::-webkit-scrollbar-thumb:hover {
 
 /* =========================================================
    MAIN CONTENT
-   INDEPENDENT SCROLL
 ========================================================= */
 
 main {
@@ -251,11 +247,6 @@ main {
 
   scrollbar-width: thin;
 }
-
-
-/* =========================================================
-   MAIN SCROLLBAR
-========================================================= */
 
 main::-webkit-scrollbar {
   width: 8px;
@@ -281,7 +272,7 @@ main::-webkit-scrollbar-thumb:hover {
 
 header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
 
   gap: 20px;
@@ -318,9 +309,22 @@ header p {
 
 
 /* =========================================================
-   UPLOAD BUTTON
+   HEADER ACTIONS
 ========================================================= */
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+
+  gap: 8px;
+
+  flex-wrap: wrap;
+
+  min-width: 0;
+}
+
+.action-button,
 .upload {
   display: inline-flex;
   align-items: center;
@@ -330,12 +334,16 @@ header p {
 
   flex: 0 0 auto;
 
+  min-height: 40px;
+
+  border: 0;
+
   background: #111827;
   color: #ffffff;
 
   border-radius: 10px;
 
-  padding: 11px 16px;
+  padding: 10px 15px;
 
   font-size: 13px;
   font-weight: 700;
@@ -343,12 +351,31 @@ header p {
   cursor: pointer;
 
   white-space: nowrap;
+
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.05s ease;
 }
 
+.action-button:hover,
 .upload:hover {
   background: #1f2937;
 }
 
+.action-button:active,
+.upload:active {
+  transform: translateY(1px);
+}
+
+.action-button:disabled,
+.upload:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.action-button svg,
 .upload svg {
   width: 17px;
   height: 17px;
@@ -358,10 +385,72 @@ header p {
   display: none;
 }
 
+.analyze-action {
+  background: #4f46e5;
+}
+
+.analyze-action:hover {
+  background: #4338ca;
+}
+
+
+/* =========================================================
+   STATUS BAR
+========================================================= */
+
+.status-bar {
+  display: flex;
+  align-items: flex-start;
+
+  gap: 8px;
+
+  margin: -8px 0 18px;
+
+  padding: 10px 12px;
+
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+
+  background: #ffffff;
+
+  color: #687080;
+
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.status-bar svg {
+  width: 15px;
+  height: 15px;
+
+  flex: 0 0 15px;
+
+  margin-top: 1px;
+
+  color: #4f46e5;
+}
+
+.status-bar.success {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.status-bar.error {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
+.status-bar.warning {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #c2410c;
+}
+
 
 /* =========================================================
    MOBILE MENU BUTTON
-   HIDDEN ON DESKTOP
 ========================================================= */
 
 .mobile-menu-button {
@@ -401,7 +490,6 @@ header p {
 
 /* =========================================================
    MOBILE DRAWER
-   HIDDEN ON DESKTOP
 ========================================================= */
 
 .mobile-drawer {
@@ -562,6 +650,10 @@ header p {
   overflow: hidden;
 }
 
+.panel + .panel {
+  margin-top: 16px;
+}
+
 .panel h2 {
   margin: 0 0 16px;
 
@@ -586,10 +678,15 @@ header p {
 .tr {
   display: grid;
 
+  /*
+    Documents:
+    Document | Pages | Facts | Status
+  */
   grid-template-columns:
     minmax(0, 1fr)
     80px
-    90px;
+    90px
+    110px;
 
   gap: 12px;
 
@@ -650,6 +747,23 @@ header p {
 
 
 /* =========================================================
+   DOCUMENT STATUS
+========================================================= */
+
+.document-name {
+  min-width: 0;
+}
+
+.document-name b {
+  line-height: 1.45;
+}
+
+.document-name small {
+  line-height: 1.35;
+}
+
+
+/* =========================================================
    BADGES
 ========================================================= */
 
@@ -700,6 +814,26 @@ header p {
   color: #2563eb;
 }
 
+.badge.neutral {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.badge.success {
+  background: #ecfdf3;
+  color: #15803d;
+}
+
+.badge.failure {
+  background: #fff1f2;
+  color: #dc2626;
+}
+
+.badge.pending {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
 
 /* =========================================================
    FACTS
@@ -715,10 +849,19 @@ header p {
   border-bottom: 1px solid #eef0f3;
 
   cursor: pointer;
+
+  transition:
+    background 0.15s ease,
+    padding-left 0.15s ease,
+    padding-right 0.15s ease;
 }
 
 .fact:last-child {
   border-bottom: 0;
+}
+
+.fact:hover {
+  background: #fafbff;
 }
 
 .fact > div {
@@ -821,9 +964,65 @@ header p {
   font-size: 12px;
 }
 
+.toolbar input::placeholder {
+  color: #a1a7b2;
+}
+
 .toolbar input:focus {
   border-color: #a5b4fc;
   box-shadow: 0 0 0 3px #eef2ff;
+}
+
+
+/* =========================================================
+   SMALL ACTIONS
+========================================================= */
+
+.mini-actions {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  flex-wrap: wrap;
+}
+
+.mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 7px;
+
+  border: 1px solid #e0e3e9;
+
+  border-radius: 8px;
+
+  background: #ffffff;
+
+  color: #4b5563;
+
+  padding: 7px 10px;
+
+  font-size: 11px;
+  font-weight: 700;
+
+  cursor: pointer;
+}
+
+.mini-button:hover {
+  background: #f7f8fa;
+  color: #111827;
+}
+
+.mini-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mini-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 
@@ -944,6 +1143,114 @@ header p {
   word-break: break-word;
 }
 
+.signals {
+  display: flex;
+  align-items: center;
+
+  flex-wrap: wrap;
+
+  gap: 5px;
+
+  margin-top: 8px;
+}
+
+.signal {
+  display: inline-flex;
+  align-items: center;
+
+  padding: 3px 6px;
+
+  border-radius: 6px;
+
+  background: #f1f3f5;
+
+  color: #737b88;
+
+  font-size: 9px;
+  font-weight: 700;
+
+  overflow-wrap: anywhere;
+}
+
+
+/* =========================================================
+   EVIDENCE / SOURCE
+========================================================= */
+
+.source-line {
+  display: flex;
+  align-items: center;
+
+  flex-wrap: wrap;
+
+  gap: 6px;
+
+  margin-top: 7px;
+
+  color: #9299a6;
+
+  font-size: 10px;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.source-line strong {
+  color: #656d7a;
+}
+
+.source-line .dot {
+  color: #c2c6cd;
+}
+
+.evidence {
+  margin-top: 20px;
+
+  padding: 14px;
+
+  background: #f8f9fb;
+
+  border-radius: 10px;
+}
+
+.evidence b {
+  font-size: 11px;
+  color: #4b5563;
+}
+
+.evidence p {
+  margin: 8px 0 0;
+
+  color: #626a77;
+
+  font-size: 12px;
+  line-height: 1.6;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.evidence-label {
+  display: block;
+
+  margin-bottom: 7px;
+
+  color: #4b5563;
+
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.evidence-meta {
+  margin-top: 8px;
+
+  color: #8b93a0;
+
+  font-size: 10px;
+
+  line-height: 1.45;
+}
+
 
 /* =========================================================
    EVALUATION
@@ -952,13 +1259,27 @@ header p {
 .eval {
   min-width: 0;
 
-  padding: 13px 0;
+  padding: 14px 0;
 
   border-bottom: 1px solid #eef0f3;
 }
 
 .eval:last-child {
   border-bottom: 0;
+}
+
+.eval-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+
+  gap: 12px;
+
+  min-width: 0;
+}
+
+.eval-title {
+  min-width: 0;
 }
 
 .eval b {
@@ -981,6 +1302,66 @@ header p {
 
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.eval-result {
+  margin-top: 9px;
+
+  padding: 10px 12px;
+
+  border-radius: 9px;
+
+  background: #f8f9fb;
+
+  color: #687080;
+
+  font-size: 11px;
+  line-height: 1.5;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.eval-result.success {
+  background: #f0fdf4;
+
+  color: #166534;
+}
+
+.eval-result.failure {
+  background: #fff1f2;
+
+  color: #be123c;
+}
+
+.eval-result.pending {
+  background: #fff7ed;
+
+  color: #c2410c;
+}
+
+.eval-source {
+  margin-top: 8px;
+
+  padding: 9px 10px;
+
+  border-left: 3px solid #e5e7eb;
+
+  background: #fafafa;
+
+  border-radius: 0 7px 7px 0;
+
+  color: #707784;
+
+  font-size: 10px;
+  line-height: 1.5;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.eval-source strong {
+  color: #4b5563;
 }
 
 .count {
@@ -1125,33 +1506,6 @@ header p {
   word-break: break-word;
 }
 
-.evidence {
-  margin-top: 20px;
-
-  padding: 14px;
-
-  background: #f8f9fb;
-
-  border-radius: 10px;
-}
-
-.evidence b {
-  font-size: 11px;
-  color: #4b5563;
-}
-
-.evidence p {
-  margin: 8px 0 0;
-
-  color: #626a77;
-
-  font-size: 12px;
-  line-height: 1.6;
-
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
 .meta {
   display: flex;
   flex-direction: column;
@@ -1165,6 +1519,9 @@ header p {
   color: #707784;
 
   font-size: 11px;
+
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .warning {
@@ -1195,6 +1552,43 @@ header p {
 
   width: 15px;
   height: 15px;
+}
+
+
+/* =========================================================
+   LOADING / PROCESSING
+========================================================= */
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 8px;
+
+  min-height: 100px;
+
+  color: #858c99;
+
+  font-size: 12px;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+
+  border: 2px solid #e5e7eb;
+  border-top-color: #4f46e5;
+
+  border-radius: 50%;
+
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 
@@ -1256,6 +1650,22 @@ header p {
   .grid {
     grid-template-columns: 1fr;
   }
+
+  header {
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    max-width: 310px;
+  }
+
+  .tr {
+    grid-template-columns:
+      minmax(0, 1fr)
+      70px
+      75px
+      95px;
+  }
 }
 
 
@@ -1280,21 +1690,27 @@ header p {
   }
 
 
-  /* Hide desktop sidebar */
+  /* -------------------------------------------------------
+     Hide desktop sidebar
+  ------------------------------------------------------- */
 
   aside {
     display: none !important;
   }
 
 
-  /* Show mobile menu */
+  /* -------------------------------------------------------
+     Show mobile menu
+  ------------------------------------------------------- */
 
   .mobile-menu-button {
     display: inline-flex !important;
   }
 
 
-  /* Mobile drawer */
+  /* -------------------------------------------------------
+     Mobile drawer
+  ------------------------------------------------------- */
 
   .mobile-drawer {
     display: flex !important;
@@ -1348,7 +1764,9 @@ header p {
   }
 
 
-  /* Overlay */
+  /* -------------------------------------------------------
+     Overlay
+  ------------------------------------------------------- */
 
   .mobile-overlay {
     display: block !important;
@@ -1363,7 +1781,9 @@ header p {
   }
 
 
-  /* Drawer header */
+  /* -------------------------------------------------------
+     Drawer header
+  ------------------------------------------------------- */
 
   .mobile-drawer-header {
     display: flex;
@@ -1385,7 +1805,9 @@ header p {
   }
 
 
-  /* Drawer nav */
+  /* -------------------------------------------------------
+     Drawer nav
+  ------------------------------------------------------- */
 
   .mobile-drawer .nav {
     width: 100%;
@@ -1396,14 +1818,18 @@ header p {
   }
 
 
-  /* Drawer bottom */
+  /* -------------------------------------------------------
+     Drawer bottom
+  ------------------------------------------------------- */
 
   .mobile-drawer .sideBottom {
     margin-top: auto;
   }
 
 
-  /* Main */
+  /* -------------------------------------------------------
+     Main
+  ------------------------------------------------------- */
 
   main {
     width: 100%;
@@ -1419,7 +1845,9 @@ header p {
   }
 
 
-  /* Header */
+  /* -------------------------------------------------------
+     Header
+  ------------------------------------------------------- */
 
   header {
     flex-direction: column;
@@ -1439,8 +1867,34 @@ header p {
     font-size: 12px;
   }
 
+  .header-actions {
+    width: 100%;
 
-  /* Upload */
+    display: grid;
+
+    grid-template-columns: 1fr;
+
+    gap: 8px;
+  }
+
+  .header-actions .upload,
+  .header-actions .action-button {
+    width: 100%;
+  }
+
+
+  /* -------------------------------------------------------
+     Status
+  ------------------------------------------------------- */
+
+  .status-bar {
+    margin-top: -4px;
+  }
+
+
+  /* -------------------------------------------------------
+     Upload
+  ------------------------------------------------------- */
 
   .upload {
     width: 100%;
@@ -1449,7 +1903,9 @@ header p {
   }
 
 
-  /* Cards */
+  /* -------------------------------------------------------
+     Cards
+  ------------------------------------------------------- */
 
   .cards {
     grid-template-columns: 1fr;
@@ -1458,7 +1914,9 @@ header p {
   }
 
 
-  /* Grid */
+  /* -------------------------------------------------------
+     Grid
+  ------------------------------------------------------- */
 
   .grid {
     display: block;
@@ -1469,7 +1927,9 @@ header p {
   }
 
 
-  /* Toolbar */
+  /* -------------------------------------------------------
+     Toolbar
+  ------------------------------------------------------- */
 
   .toolbar {
     flex-direction: column;
@@ -1484,7 +1944,9 @@ header p {
   }
 
 
-  /* Relationship */
+  /* -------------------------------------------------------
+     Relationships
+  ------------------------------------------------------- */
 
   .pair {
     grid-template-columns: 1fr;
@@ -1496,28 +1958,61 @@ header p {
     display: none;
   }
 
+  .relhead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 
-  /* Table */
+
+  /* -------------------------------------------------------
+     Documents table
+  ------------------------------------------------------- */
 
   .tr {
     grid-template-columns:
       minmax(0, 1fr)
       65px;
+
+    gap: 10px;
   }
 
-  .tr span:last-child {
+  .tr span:nth-child(3),
+  .tr span:nth-child(4) {
     display: none;
   }
 
+  .tr.th span:nth-child(2) {
+    text-align: right;
+  }
 
-  /* Panel */
+
+  /* -------------------------------------------------------
+     Panel
+  ------------------------------------------------------- */
 
   .panel {
     padding: 15px;
   }
 
 
-  /* Inspector */
+  /* -------------------------------------------------------
+     Evaluation
+  ------------------------------------------------------- */
+
+  .eval-head {
+    flex-direction: column;
+
+    align-items: flex-start;
+  }
+
+  .eval-source {
+    font-size: 10px;
+  }
+
+
+  /* -------------------------------------------------------
+     Inspector
+  ------------------------------------------------------- */
 
   .drawer {
     width: 100vw;
@@ -1546,6 +2041,10 @@ header p {
     font-size: 22px;
   }
 
+  header p {
+    font-size: 11px;
+  }
+
   .card {
     padding: 14px;
   }
@@ -1567,5 +2066,31 @@ header p {
 
   .mobile-drawer {
     width: 86vw;
+  }
+
+  .fact {
+    padding-right: 30px;
+  }
+
+  .badge {
+    font-size: 9px;
+    padding: 4px 7px;
+  }
+}
+
+
+/* =========================================================
+   ACCESSIBILITY / REDUCED MOTION
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
