@@ -7,6 +7,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
+# ============================================================
+# CONSTANTS
+# ============================================================
+
 NEGATIONS = {
     "not",
     "no",
@@ -30,7 +34,6 @@ CHANGE_WORDS = {
     "dropped",
 }
 
-# Common words that are not useful for candidate matching.
 STOP_TOKENS = {
     "the",
     "and",
@@ -63,10 +66,15 @@ STOP_TOKENS = {
 }
 
 
+# ============================================================
+# JSON HELPERS
+# ============================================================
+
 def safe_json_list(value):
     """
-    Safely parse a JSON list stored in the database.
+    Safely parse a JSON list stored in SQLite.
     """
+
     if not value:
         return []
 
@@ -76,56 +84,63 @@ def safe_json_list(value):
         if isinstance(parsed, list):
             return parsed
 
-    except (TypeError, json.JSONDecodeError):
+    except (
+        TypeError,
+        json.JSONDecodeError,
+    ):
         pass
 
     return []
 
 
-def tokens(s):
+# ============================================================
+# TOKENIZATION
+# ============================================================
+
+def tokens(text):
     """
-    Convert text into normalized tokens.
+    Normalize text into tokens.
     """
+
     return set(
         re.findall(
             r"[a-zA-Z][a-zA-Z0-9_-]+",
-            (s or "").lower(),
+            (text or "").lower(),
         )
     )
 
 
-def meaningful_tokens(s):
+def meaningful_tokens(text):
     """
-    Remove generic words so candidate matching is more useful.
+    Remove generic words.
     """
-    return tokens(s) - STOP_TOKENS - NEGATIONS
+
+    return (
+        tokens(text)
+        - STOP_TOKENS
+        - NEGATIONS
+    )
 
 
-def similarity_from_matrix(matrix, i, j):
-    """
-    Calculate cosine similarity using a pre-built TF-IDF matrix.
-
-    This is much faster than creating a new TfidfVectorizer
-    for every fact pair.
-    """
-    return float(cosine_similarity(matrix[i], matrix[j])[0, 0])
-
+# ============================================================
+# TF-IDF
+# ============================================================
 
 def build_similarity_matrix(facts):
     """
-    Build ONE TF-IDF matrix for all facts.
+    Build one TF-IDF matrix for all facts.
 
-    Old implementation:
-        TfidfVectorizer() -> fit_transform([a, b])
-        for every pair.
-
-    New implementation:
-        One vectorizer -> one matrix.
+    This is significantly faster than fitting a new
+    vectorizer for every pair.
     """
+
     if not facts:
         return None
 
-    texts = [fact.get("text", "") or "" for fact in facts]
+    texts = [
+        fact.get("text", "") or ""
+        for fact in facts
+    ]
 
     vectorizer = TfidfVectorizer(
         ngram_range=(1, 2),
@@ -136,25 +151,38 @@ def build_similarity_matrix(facts):
 
     try:
         return vectorizer.fit_transform(texts)
+
     except ValueError:
-        # Happens if all texts are empty.
         return None
 
 
+def similarity_from_matrix(matrix, i, j):
+    """
+    Calculate cosine similarity from a pre-built matrix.
+    """
+
+    return float(
+        cosine_similarity(
+            matrix[i],
+            matrix[j],
+        )[0, 0]
+    )
+
+
+# ============================================================
+# CANDIDATE GENERATION
+# ============================================================
+
 def candidate_pairs(facts):
     """
-    Generate only likely fact pairs.
+    Generate likely cross-document fact pairs.
 
-    Instead of:
+    Candidate signals:
+        - shared entity
+        - shared entity + unit
+        - shared meaningful token
 
-        N facts -> N*(N-1)/2 comparisons
-
-    we first bucket facts by:
-        - entity
-        - normalized unit
-        - meaningful text tokens
-
-    This dramatically reduces the number of expensive comparisons.
+    Same-document facts are never compared.
     """
 
     if not facts:
@@ -163,50 +191,89 @@ def candidate_pairs(facts):
     buckets = defaultdict(set)
 
     for index, fact in enumerate(facts):
-        document_id = fact.get("document_id")
 
         entities = {
-            str(x).strip().lower()
-            for x in safe_json_list(fact.get("entities"))
-            if str(x).strip()
+            str(value).strip().lower()
+            for value in safe_json_list(
+                fact.get("entities")
+            )
+            if str(value).strip()
         }
 
         unit = (
-            str(fact.get("normalized_unit") or "")
+            str(
+                fact.get("normalized_unit")
+                or ""
+            )
             .strip()
             .lower()
         )
 
-        text_tokens = meaningful_tokens(fact.get("text", ""))
+        text_tokens = meaningful_tokens(
+            fact.get("text", "")
+        )
 
-        # Strong signal: shared entity + unit.
+        # ----------------------------------------------------
+        # Entity buckets
+        # ----------------------------------------------------
+
         for entity in entities:
-            buckets[("entity", entity, unit)].add(index)
 
-            # Also create an entity-only bucket.
-            buckets[("entity_only", entity)].add(index)
+            buckets[
+                (
+                    "entity",
+                    entity,
+                    unit,
+                )
+            ].add(index)
 
-        # Useful fallback for facts without entities.
+            buckets[
+                (
+                    "entity_only",
+                    entity,
+                )
+            ].add(index)
+
+        # ----------------------------------------------------
+        # Token buckets
+        # ----------------------------------------------------
+
         for token in text_tokens:
+
             if len(token) >= 4:
-                buckets[("token", token)].add(index)
+
+                buckets[
+                    (
+                        "token",
+                        token,
+                    )
+                ].add(index)
 
     pairs = set()
 
     for group in buckets.values():
+
         if len(group) < 2:
             continue
 
-        # Avoid huge buckets created by generic terms.
+        # Prevent generic tokens from creating huge
+        # comparison groups.
         if len(group) > 100:
             continue
 
-        for i, j in combinations(sorted(group), 2):
+        for i, j in combinations(
+            sorted(group),
+            2,
+        ):
+
             a = facts[i]
             b = facts[j]
 
-            # Never compare facts from the same document.
-            if a.get("document_id") == b.get("document_id"):
+            # Never compare facts inside the same PDF.
+            if (
+                a.get("document_id")
+                == b.get("document_id")
+            ):
                 continue
 
             pairs.add((i, j))
@@ -214,48 +281,68 @@ def candidate_pairs(facts):
     return list(pairs)
 
 
+# ============================================================
+# RELATIONSHIP REASONING
+# ============================================================
+
 def relationship(a, b, sem=None):
     """
     Determine the relationship between two facts.
-
-    `sem` can be supplied by compare_facts() so we don't
-    repeatedly calculate TF-IDF similarity.
     """
 
     if sem is None:
-        # Fallback for callers that directly use relationship().
-        matrix = build_similarity_matrix([a, b])
+
+        matrix = build_similarity_matrix(
+            [a, b]
+        )
 
         if matrix is None:
             sem = 0.0
         else:
-            sem = similarity_from_matrix(matrix, 0, 1)
+            sem = similarity_from_matrix(
+                matrix,
+                0,
+                1,
+            )
 
     entities_a = {
-        str(x).strip().lower()
-        for x in safe_json_list(a.get("entities"))
-        if str(x).strip()
+        str(value).strip().lower()
+        for value in safe_json_list(
+            a.get("entities")
+        )
+        if str(value).strip()
     }
 
     entities_b = {
-        str(x).strip().lower()
-        for x in safe_json_list(b.get("entities"))
-        if str(x).strip()
+        str(value).strip().lower()
+        for value in safe_json_list(
+            b.get("entities")
+        )
+        if str(value).strip()
     }
 
-    entity_overlap = len(entities_a & entities_b) / max(
-        1,
-        len(entities_a | entities_b),
+    entity_overlap = (
+        len(entities_a & entities_b)
+        / max(
+            1,
+            len(entities_a | entities_b),
+        )
     )
 
     unit_a = (
-        str(a.get("normalized_unit") or "")
+        str(
+            a.get("normalized_unit")
+            or ""
+        )
         .strip()
         .lower()
     )
 
     unit_b = (
-        str(b.get("normalized_unit") or "")
+        str(
+            b.get("normalized_unit")
+            or ""
+        )
         .strip()
         .lower()
     )
@@ -266,7 +353,11 @@ def relationship(a, b, sem=None):
         and unit_a == unit_b
     )
 
-    numeric = None
+    # --------------------------------------------------------
+    # Numerical comparison
+    # --------------------------------------------------------
+
+    numeric_difference = None
 
     value_a = a.get("normalized_value")
     value_b = b.get("normalized_value")
@@ -276,7 +367,9 @@ def relationship(a, b, sem=None):
         and value_b is not None
         and same_unit
     ):
+
         try:
+
             av = float(value_a)
             bv = float(value_b)
 
@@ -286,24 +379,35 @@ def relationship(a, b, sem=None):
                 1e-9,
             )
 
-            numeric = min(
+            numeric_difference = min(
                 abs(av - bv) / denominator,
                 1.0,
             )
 
-        except (TypeError, ValueError):
-            numeric = None
+        except (
+            TypeError,
+            ValueError,
+        ):
+            numeric_difference = None
+
+    # --------------------------------------------------------
+    # Date comparison
+    # --------------------------------------------------------
 
     dates_a = {
-        str(x).strip().lower()
-        for x in safe_json_list(a.get("dates"))
-        if str(x).strip()
+        str(value).strip().lower()
+        for value in safe_json_list(
+            a.get("dates")
+        )
+        if str(value).strip()
     }
 
     dates_b = {
-        str(x).strip().lower()
-        for x in safe_json_list(b.get("dates"))
-        if str(x).strip()
+        str(value).strip().lower()
+        for value in safe_json_list(
+            b.get("dates")
+        )
+        if str(value).strip()
     }
 
     date_overlap = (
@@ -331,54 +435,95 @@ def relationship(a, b, sem=None):
         and period_a != period_b
     )
 
-    common = meaningful_tokens(
-        a.get("text", "")
-    ) & meaningful_tokens(
-        b.get("text", "")
+    # --------------------------------------------------------
+    # Text overlap
+    # --------------------------------------------------------
+
+    common_tokens = (
+        meaningful_tokens(
+            a.get("text", "")
+        )
+        &
+        meaningful_tokens(
+            b.get("text", "")
+        )
     )
 
-    meaningful_overlap = len(common) >= 3
+    meaningful_overlap = (
+        len(common_tokens) >= 3
+    )
+
+    # --------------------------------------------------------
+    # Overall score
+    # --------------------------------------------------------
 
     score = (
         0.55 * sem
         + 0.30 * entity_overlap
         + 0.15 * (
-            1.0 if meaningful_overlap else 0.0
+            1.0
+            if meaningful_overlap
+            else 0.0
         )
     )
 
     signals = {
-        "semantic_similarity": round(sem, 3),
-        "entity_overlap": round(entity_overlap, 3),
-        "normalized_unit_match": bool(same_unit),
+        "semantic_similarity": round(
+            sem,
+            3,
+        ),
+        "entity_overlap": round(
+            entity_overlap,
+            3,
+        ),
+        "normalized_unit_match": bool(
+            same_unit
+        ),
         "relative_numeric_difference": (
             None
-            if numeric is None
-            else round(numeric, 3)
+            if numeric_difference is None
+            else round(
+                numeric_difference,
+                3,
+            )
         ),
         "date_overlap": date_overlap,
-        "different_period_type": different_period,
+        "different_period_type": (
+            different_period
+        ),
     }
 
-    # Very weak relationship.
+    # --------------------------------------------------------
+    # Weak relationship
+    # --------------------------------------------------------
+
     if score < 0.30:
+
         return (
             "RELATED",
             score,
             (
                 "The statements have limited "
-                "semantic/entity overlap; they are "
-                "retained as related rather than "
-                "forced into a stronger relationship."
+                "semantic or entity overlap; "
+                "they are retained as related "
+                "rather than forced into a "
+                "stronger relationship."
             ),
             signals,
         )
 
-    # Numerical reasoning.
-    if numeric is not None:
+    # --------------------------------------------------------
+    # Numerical reasoning
+    # --------------------------------------------------------
 
-        # Almost identical normalized values.
-        if numeric <= 0.02 and date_overlap is not False:
+    if numeric_difference is not None:
+
+        # Almost identical values.
+        if (
+            numeric_difference <= 0.02
+            and date_overlap is not False
+        ):
+
             return (
                 "CORROBORATES",
                 score,
@@ -392,52 +537,80 @@ def relationship(a, b, sem=None):
                 signals,
             )
 
-        # Different periods explain the difference.
-        if different_period or date_overlap is False:
+        # Different time scopes.
+        if (
+            different_period
+            or date_overlap is False
+        ):
+
             return (
                 "RECONCILES",
                 score,
                 (
                     "The measurements differ, but "
-                    "the evidence indicates different "
-                    "time-period scopes, so the values "
-                    "need not conflict."
+                    "the evidence indicates "
+                    "different time-period scopes, "
+                    "so the values need not conflict."
                 ),
                 signals,
             )
 
-        # Material numerical difference.
-        if numeric >= 0.10:
+        # Material disagreement.
+        if numeric_difference >= 0.10:
+
             return (
                 "CONTRADICTS",
                 score,
                 (
-                    "Both statements describe a similar "
-                    "measurable fact in compatible units, "
-                    "but their normalized values materially "
+                    "Both statements describe a "
+                    "similar measurable fact in "
+                    "compatible units, but their "
+                    "normalized values materially "
                     "disagree."
                 ),
                 signals,
             )
 
-    # Semantic contradiction heuristics.
-    tokens_a = tokens(a.get("text", ""))
-    tokens_b = tokens(b.get("text", ""))
+    # --------------------------------------------------------
+    # Semantic contradiction
+    # --------------------------------------------------------
 
-    neg_a = bool(tokens_a & NEGATIONS)
-    neg_b = bool(tokens_b & NEGATIONS)
+    tokens_a = tokens(
+        a.get("text", "")
+    )
 
-    change_a = tokens_a & CHANGE_WORDS
-    change_b = tokens_b & CHANGE_WORDS
+    tokens_b = tokens(
+        b.get("text", "")
+    )
 
-    if sem >= 0.62 and neg_a != neg_b:
+    neg_a = bool(
+        tokens_a & NEGATIONS
+    )
+
+    neg_b = bool(
+        tokens_b & NEGATIONS
+    )
+
+    change_a = (
+        tokens_a & CHANGE_WORDS
+    )
+
+    change_b = (
+        tokens_b & CHANGE_WORDS
+    )
+
+    if (
+        sem >= 0.62
+        and neg_a != neg_b
+    ):
+
         return (
             "CONTRADICTS",
             score,
             (
                 "The statements are semantically "
-                "similar but differ in polarity/"
-                "negation."
+                "similar but differ in "
+                "polarity or negation."
             ),
             signals,
         )
@@ -448,69 +621,78 @@ def relationship(a, b, sem=None):
         and change_b
         and change_a != change_b
     ):
+
         return (
             "CONTRADICTS",
             score,
             (
-                "The statements describe the same "
-                "topic but assert opposing change "
-                "directions."
+                "The statements describe the "
+                "same topic but assert opposing "
+                "change directions."
             ),
             signals,
         )
+
+    # --------------------------------------------------------
+    # Default
+    # --------------------------------------------------------
 
     return (
         "RELATED",
         score,
         (
-            "The statements are sufficiently similar "
-            "to inspect together, but the available "
-            "evidence is not strong enough to label "
-            "them corroborating or contradictory."
+            "The statements are sufficiently "
+            "similar to inspect together, but "
+            "the available evidence is not strong "
+            "enough to label them corroborating "
+            "or contradictory."
         ),
         signals,
     )
 
 
+# ============================================================
+# FACT COMPARISON
+# ============================================================
+
 def compare_facts(facts):
     """
-    Compare facts efficiently.
+    Efficiently compare facts.
 
-    Performance improvements:
-        1. Candidate filtering before similarity.
-        2. One TF-IDF matrix for all facts.
-        3. No same-document comparisons.
-        4. Similarity calculated only for candidate pairs.
+    Pipeline:
+
+        Facts
+          ↓
+        Candidate filtering
+          ↓
+        One TF-IDF matrix
+          ↓
+        Cheap similarity filtering
+          ↓
+        Relationship reasoning
     """
 
     if not facts:
         return []
 
-    # ---------------------------------------------------------
-    # STEP 1: Find realistic candidate pairs.
-    # ---------------------------------------------------------
-
-    candidates = candidate_pairs(facts)
+    candidates = candidate_pairs(
+        facts
+    )
 
     if not candidates:
         return []
 
-    # ---------------------------------------------------------
-    # STEP 2: Build TF-IDF ONCE.
-    # ---------------------------------------------------------
-
-    matrix = build_similarity_matrix(facts)
+    matrix = build_similarity_matrix(
+        facts
+    )
 
     if matrix is None:
         return []
 
-    # ---------------------------------------------------------
-    # STEP 3: Evaluate only candidates.
-    # ---------------------------------------------------------
-
     pairs = []
 
     for i, j in candidates:
+
         a = facts[i]
         b = facts[j]
 
@@ -520,29 +702,39 @@ def compare_facts(facts):
             j,
         )
 
-        # Cheap early filter.
-        #
-        # If semantic similarity is extremely low
-        # and there are no shared entities, there is
-        # little reason to run the full reasoning.
         entities_a = {
-            str(x).strip().lower()
-            for x in safe_json_list(a.get("entities"))
-            if str(x).strip()
+            str(value).strip().lower()
+            for value in safe_json_list(
+                a.get("entities")
+            )
+            if str(value).strip()
         }
 
         entities_b = {
-            str(x).strip().lower()
-            for x in safe_json_list(b.get("entities"))
-            if str(x).strip()
+            str(value).strip().lower()
+            for value in safe_json_list(
+                b.get("entities")
+            )
+            if str(value).strip()
         }
 
-        shared_entities = entities_a & entities_b
+        shared_entities = (
+            entities_a & entities_b
+        )
 
         common_tokens = (
-            meaningful_tokens(a.get("text", ""))
-            & meaningful_tokens(b.get("text", ""))
+            meaningful_tokens(
+                a.get("text", "")
+            )
+            &
+            meaningful_tokens(
+                b.get("text", "")
+            )
         )
+
+        # ----------------------------------------------------
+        # Cheap early rejection
+        # ----------------------------------------------------
 
         if (
             sem < 0.20
@@ -551,13 +743,21 @@ def compare_facts(facts):
         ):
             continue
 
-        relation_name, score, explanation, signals = relationship(
+        (
+            relation_name,
+            score,
+            explanation,
+            signals,
+        ) = relationship(
             a,
             b,
             sem=sem,
         )
 
-        # Keep strong relationships and useful related facts.
+        # ----------------------------------------------------
+        # Keep meaningful relationships
+        # ----------------------------------------------------
+
         if (
             relation_name
             in {
@@ -567,6 +767,7 @@ def compare_facts(facts):
             }
             or score >= 0.48
         ):
+
             pairs.append(
                 (
                     a["id"],
@@ -574,7 +775,9 @@ def compare_facts(facts):
                     relation_name,
                     score,
                     explanation,
-                    json.dumps(signals),
+                    json.dumps(
+                        signals
+                    ),
                 )
             )
 
