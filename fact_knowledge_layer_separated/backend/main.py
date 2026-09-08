@@ -3,20 +3,34 @@ import json
 import os
 import shutil
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    HTTPException,
+)
+
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import UPLOAD_DIR
 from .db import init_db, get_db
-from .services import ingest_document, analyze_all
+from .services import (
+    ingest_document,
+    analyze_all,
+    analyze_fact_ids,
+)
 
+
+# ============================================================
+# APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="Fact Knowledge Layer",
     version="1.0.0",
     description=(
-        "PDF-grounded fact extraction and cross-document "
-        "reasoning prototype."
+        "PDF-grounded fact extraction and "
+        "cross-document reasoning prototype."
     ),
 )
 
@@ -40,6 +54,7 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
+
     return {
         "status": "ok",
         "gemini_configured": bool(
@@ -68,74 +83,115 @@ def startup():
 async def upload_documents(
     files: list[UploadFile] = File(...)
 ):
+
     if not files:
+
         raise HTTPException(
             status_code=400,
-            detail="At least one PDF file is required."
+            detail=(
+                "At least one PDF file "
+                "is required."
+            ),
         )
 
     results = []
 
+    # Keep track of new facts so that the caller
+    # can optionally analyze them later.
+    new_fact_ids = []
+
     for upload in files:
 
         # ----------------------------------------------------
-        # Validate extension
+        # Validate file
         # ----------------------------------------------------
 
         if (
             not upload.filename
-            or not upload.filename.lower().endswith(".pdf")
+            or not upload.filename
+            .lower()
+            .endswith(".pdf")
         ):
+
             raise HTTPException(
                 status_code=400,
-                detail="Only PDF files are accepted."
+                detail=(
+                    "Only PDF files are accepted."
+                ),
             )
 
         # ----------------------------------------------------
-        # Prevent path traversal
+        # Safe filename
         # ----------------------------------------------------
 
-        safe_name = Path(upload.filename).name
+        safe_name = Path(
+            upload.filename
+        ).name
 
         if not safe_name:
+
             raise HTTPException(
                 status_code=400,
-                detail="Invalid PDF filename."
+                detail=(
+                    "Invalid PDF filename."
+                ),
             )
 
-        target = UPLOAD_DIR / safe_name
+        target = (
+            UPLOAD_DIR
+            / safe_name
+        )
 
         # ----------------------------------------------------
-        # Save uploaded PDF
+        # Save PDF
         # ----------------------------------------------------
 
         try:
+
             with target.open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
+
+                shutil.copyfileobj(
+                    upload.file,
+                    out,
+                )
+
         finally:
+
             await upload.close()
 
         # ----------------------------------------------------
-        # Extract and store facts
+        # Extract facts
         # ----------------------------------------------------
 
         try:
-            doc_id, count = ingest_document(target)
+
+            doc_id, count = ingest_document(
+                target
+            )
+
         except Exception as exc:
-            # Remove partially uploaded file if ingestion fails.
+
             if target.exists():
-                target.unlink()
+
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
 
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to process {safe_name}: {exc}"
+                detail=(
+                    f"Failed to process "
+                    f"{safe_name}: {exc}"
+                ),
             )
 
         # ----------------------------------------------------
-        # Read actual page count from database
+        # Read document information
         # ----------------------------------------------------
 
         with get_db() as db:
+
             row = db.execute(
                 """
                 SELECT
@@ -145,13 +201,36 @@ async def upload_documents(
                 FROM documents
                 WHERE id = ?
                 """,
-                (doc_id,)
+                (doc_id,),
             ).fetchone()
 
-        if row is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Document was processed but could not be read back."
+            if row is None:
+
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Document was processed "
+                        "but could not be read back."
+                    ),
+                )
+
+            # ------------------------------------------------
+            # Get IDs of facts belonging to this document.
+            # ------------------------------------------------
+
+            fact_rows = db.execute(
+                """
+                SELECT id
+                FROM facts
+                WHERE document_id = ?
+                ORDER BY id
+                """,
+                (doc_id,),
+            ).fetchall()
+
+            new_fact_ids.extend(
+                int(fact["id"])
+                for fact in fact_rows
             )
 
         results.append(
@@ -163,21 +242,31 @@ async def upload_documents(
             }
         )
 
-    # --------------------------------------------------------
-    # Build cross-document relationships
-    # --------------------------------------------------------
-
-    try:
-        relationships = analyze_all()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Document ingestion succeeded but relationship analysis failed: {exc}"
-        )
+    # ========================================================
+    # IMPORTANT:
+    #
+    # DO NOT RUN analyze_all() HERE.
+    #
+    # Upload should return immediately after extraction.
+    # Relationship analysis is available through
+    # POST /api/analyze.
+    # ========================================================
 
     return {
         "documents": results,
-        "relationships_created": relationships,
+        "facts_created": len(
+            new_fact_ids
+        ),
+        "relationships_created": 0,
+        "analysis_required": bool(
+            new_fact_ids
+        ),
+        "message": (
+            "Documents uploaded and facts "
+            "extracted successfully. "
+            "Run analysis to build "
+            "cross-document relationships."
+        ),
     }
 
 
@@ -204,12 +293,64 @@ def analyze():
             """
         ).fetchone()["n"]
 
-    relationships = analyze_all()
+        # ----------------------------------------------------
+        # Find facts that currently participate in no
+        # relationship.
+        #
+        # These are treated as pending facts.
+        # ----------------------------------------------------
+
+        pending_rows = db.execute(
+            """
+            SELECT f.id
+            FROM facts f
+            LEFT JOIN relationships r1
+                ON r1.fact_a = f.id
+            LEFT JOIN relationships r2
+                ON r2.fact_b = f.id
+            WHERE r1.id IS NULL
+              AND r2.id IS NULL
+            ORDER BY f.id
+            """
+        ).fetchall()
+
+        pending_ids = [
+            int(row["id"])
+            for row in pending_rows
+        ]
+
+    # --------------------------------------------------------
+    # If there are no pending facts, don't rebuild the
+    # entire relationship graph unnecessarily.
+    # --------------------------------------------------------
+
+    if not pending_ids:
+
+        return {
+            "documents_processed": documents,
+            "facts_created": facts,
+            "relationships_created": 0,
+            "message": (
+                "No pending facts require "
+                "relationship analysis."
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Incremental analysis
+    # --------------------------------------------------------
+
+    relationships = analyze_fact_ids(
+        pending_ids
+    )
 
     return {
         "documents_processed": documents,
         "facts_created": facts,
         "relationships_created": relationships,
+        "pending_facts_analyzed": len(
+            pending_ids
+        ),
     }
 
 
@@ -233,8 +374,10 @@ def documents():
                 d.created_at,
                 COUNT(f.id) AS fact_count
             FROM documents d
+
             LEFT JOIN facts f
                 ON f.document_id = d.id
+
             GROUP BY
                 d.id,
                 d.filename,
@@ -242,11 +385,15 @@ def documents():
                 d.sha256,
                 d.page_count,
                 d.created_at
+
             ORDER BY d.id DESC
             """
         ).fetchall()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 # ============================================================
@@ -266,8 +413,11 @@ def facts():
                     facts.*,
                     documents.filename
                 FROM facts
+
                 JOIN documents
-                    ON documents.id = facts.document_id
+                    ON documents.id =
+                       facts.document_id
+
                 ORDER BY facts.id DESC
                 """
             ).fetchall()
@@ -294,25 +444,32 @@ def facts():
 # FACTS FOR ONE DOCUMENT
 # ============================================================
 
-@app.get("/api/documents/{document_id}/facts")
-def document_facts(document_id: int):
+@app.get(
+    "/api/documents/{document_id}/facts"
+)
+def document_facts(
+    document_id: int
+):
 
     with get_db() as db:
 
-        # First make sure document exists.
         document = db.execute(
             """
-            SELECT id, filename, page_count
+            SELECT
+                id,
+                filename,
+                page_count
             FROM documents
             WHERE id = ?
             """,
-            (document_id,)
+            (document_id,),
         ).fetchone()
 
         if document is None:
+
             raise HTTPException(
                 status_code=404,
-                detail="Document not found."
+                detail="Document not found.",
             )
 
         rows = [
@@ -324,7 +481,7 @@ def document_facts(document_id: int):
                 WHERE document_id = ?
                 ORDER BY page, id
                 """,
-                (document_id,)
+                (document_id,),
             ).fetchall()
         ]
 
@@ -436,7 +593,10 @@ def reset():
             "DELETE FROM documents"
         )
 
+    # --------------------------------------------------------
     # Remove uploaded PDFs.
+    # --------------------------------------------------------
+
     if UPLOAD_DIR.exists():
 
         for path in UPLOAD_DIR.iterdir():
@@ -450,5 +610,8 @@ def reset():
 
     return {
         "ok": True,
-        "message": "All documents, facts and relationships were deleted."
+        "message": (
+            "All documents, facts and "
+            "relationships were deleted."
+        ),
     }
