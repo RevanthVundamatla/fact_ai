@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
+
 import { createRoot } from 'react-dom/client';
 
 import {
@@ -13,7 +19,10 @@ import {
   Search,
   ChevronRight,
   Menu,
-  X
+  X,
+  Play,
+  Clock,
+  Info
 } from 'lucide-react';
 
 import './styles.css';
@@ -23,30 +32,45 @@ import './styles.css';
    API
 ========================================================= */
 
-const API = import.meta.env.VITE_API_URL || '';
+const API = (
+  import.meta.env.VITE_API_URL || ''
+).replace(/\/$/, '');
 
 
 async function api(path, options = {}) {
 
   const response = await fetch(
-    API + path,
+    `${API}${path}`,
     options
   );
 
   if (!response.ok) {
 
-    let message = response.statusText;
+    let message =
+      response.statusText ||
+      'Request failed';
 
     try {
-      const body = await response.json();
+
+      const body =
+        await response.json();
 
       message =
         body.detail ||
         body.message ||
         JSON.stringify(body);
+
     } catch {
+
       try {
-        message = await response.text();
+
+        const text =
+          await response.text();
+
+        if (text) {
+          message = text;
+        }
+
       } catch {
         // Keep statusText.
       }
@@ -58,6 +82,96 @@ async function api(path, options = {}) {
   }
 
   return response.json();
+}
+
+
+/* =========================================================
+   SAFE HELPERS
+========================================================= */
+
+function asArray(value) {
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  return [];
+}
+
+
+function asNumber(value) {
+
+  const number =
+    Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : null;
+}
+
+
+function formatScore(value) {
+
+  const number =
+    asNumber(value);
+
+  if (number === null) {
+    return '—';
+  }
+
+  return `${(
+    number * 100
+  ).toFixed(0)}%`;
+}
+
+
+function normalizeText(value) {
+
+  return String(
+    value || ''
+  )
+    .toLowerCase()
+    .replace(/[₹,%]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+function relationName(value) {
+
+  return String(
+    value || ''
+  ).trim().toUpperCase();
+}
+
+
+function safeJsonArray(value) {
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return [];
+  }
+
+  try {
+
+    const parsed =
+      JSON.parse(value);
+
+    return Array.isArray(parsed)
+      ? parsed
+      : [];
+
+  } catch {
+
+    return [];
+  }
 }
 
 
@@ -74,7 +188,9 @@ function Badge({
     <span
       className={
         'badge ' +
-        String(type).toLowerCase()
+        String(type)
+          .toLowerCase()
+          .replace(/\s+/g, '-')
       }
     >
       {children}
@@ -89,20 +205,38 @@ function Badge({
 
 function App() {
 
-  const [docs, setDocs] = useState([]);
-  const [facts, setFacts] = useState([]);
-  const [rels, setRels] = useState([]);
+  const [docs, setDocs] =
+    useState([]);
 
-  const [tab, setTab] = useState('Overview');
+  const [facts, setFacts] =
+    useState([]);
 
-  const [q, setQ] = useState('');
+  const [rels, setRels] =
+    useState([]);
 
-  const [busy, setBusy] = useState(false);
+  const [tab, setTab] =
+    useState('Overview');
 
-  const [selected, setSelected] = useState(null);
+  const [q, setQ] =
+    useState('');
+
+  const [busy, setBusy] =
+    useState(false);
+
+  const [analysisBusy, setAnalysisBusy] =
+    useState(false);
+
+  const [selected, setSelected] =
+    useState(null);
 
   const [mobileMenuOpen, setMobileMenuOpen] =
     useState(false);
+
+  const [loadError, setLoadError] =
+    useState('');
+
+  const [analysisMessage, setAnalysisMessage] =
+    useState('');
 
 
   const nav = [
@@ -118,52 +252,70 @@ function App() {
      LOAD DATA
   ======================================================= */
 
-  const load = async () => {
+  const load = useCallback(
+    async () => {
 
-    const [
-      documents,
-      allFacts,
-      relationships
-    ] = await Promise.all([
+      setLoadError('');
 
-      api('/api/documents'),
+      const [
+        documents,
+        allFacts,
+        relationships
+      ] = await Promise.all([
 
-      api('/api/facts'),
+        api('/api/documents'),
 
-      api('/api/relationships')
+        api('/api/facts'),
 
-    ]);
+        api('/api/relationships')
 
-    setDocs(
-      Array.isArray(documents)
-        ? documents
-        : []
-    );
+      ]);
 
-    setFacts(
-      Array.isArray(allFacts)
-        ? allFacts
-        : []
-    );
+      setDocs(
+        Array.isArray(documents)
+          ? documents
+          : []
+      );
 
-    setRels(
-      Array.isArray(relationships)
-        ? relationships
-        : []
-    );
-  };
+      setFacts(
+        Array.isArray(allFacts)
+          ? allFacts
+          : []
+      );
+
+      setRels(
+        Array.isArray(relationships)
+          ? relationships
+          : []
+      );
+
+      return {
+        documents,
+        facts: allFacts,
+        relationships
+      };
+    },
+    []
+  );
 
 
   useEffect(() => {
 
     load().catch((error) => {
+
       console.error(
         'Initial load failed:',
         error
       );
+
+      setLoadError(
+        error.message ||
+        'Could not load application data.'
+      );
+
     });
 
-  }, []);
+  }, [load]);
 
 
   /* =======================================================
@@ -177,6 +329,90 @@ function App() {
     setMobileMenuOpen(false);
 
   };
+
+
+  /* =======================================================
+     ANALYZE
+  ======================================================= */
+
+  const analyze = useCallback(
+    async (showAlert = true) => {
+
+      if (analysisBusy) {
+        return;
+      }
+
+      setAnalysisBusy(true);
+
+      setAnalysisMessage(
+        'Analyzing cross-document relationships…'
+      );
+
+      try {
+
+        const result =
+          await api(
+            '/api/analyze',
+            {
+              method: 'POST'
+            }
+          );
+
+        await load();
+
+        const created =
+          Number(
+            result.relationships_created || 0
+          );
+
+        setAnalysisMessage(
+          created > 0
+            ? `Analysis complete: ${created} relationship${created === 1 ? '' : 's'} found.`
+            : 'Analysis complete. No cross-document relationships were found.'
+        );
+
+        if (showAlert && created === 0) {
+
+          // Do not use an intrusive alert for the normal
+          // zero-relationship case.
+          console.info(
+            'Analysis completed with no relationships.'
+          );
+        }
+
+      } catch (error) {
+
+        console.error(
+          'Analysis failed:',
+          error
+        );
+
+        setAnalysisMessage(
+          error.message ||
+          'Relationship analysis failed.'
+        );
+
+        if (showAlert) {
+
+          alert(
+            error.message ||
+            'Relationship analysis failed.'
+          );
+
+        }
+
+      } finally {
+
+        setAnalysisBusy(false);
+
+      }
+
+    },
+    [
+      analysisBusy,
+      load
+    ]
+  );
 
 
   /* =======================================================
@@ -195,47 +431,75 @@ function App() {
       return;
     }
 
-
     setBusy(true);
 
+    setAnalysisMessage('');
 
     const formData =
       new FormData();
 
+    [
+      ...selectedFiles
+    ].forEach((file) => {
 
-    [...selectedFiles].forEach(
-      (file) => {
+      formData.append(
+        'files',
+        file
+      );
 
-        formData.append(
-          'files',
-          file
-        );
-
-      }
-    );
-
+    });
 
     try {
 
-      await api(
-        '/api/documents',
-        {
-          method: 'POST',
-          body: formData
-        }
-      );
+      /*
+       * Step 1:
+       * Upload + extract only.
+       *
+       * The backend intentionally does NOT run
+       * relationship analysis during this request.
+       */
 
+      const uploadResult =
+        await api(
+          '/api/documents',
+          {
+            method: 'POST',
+            body: formData
+          }
+        );
 
       await load();
-
 
       setTab('Documents');
 
       setMobileMenuOpen(false);
 
+      /*
+       * Step 2:
+       * Start analysis separately.
+       *
+       * This preserves the fast upload endpoint while
+       * still giving the user automatic relationship
+       * analysis after ingestion.
+       */
+
+      if (
+        uploadResult &&
+        uploadResult.analysis_required
+      ) {
+
+        setBusy(false);
+
+        await analyze(false);
+
+      }
+
     } catch (error) {
 
-      console.error(error);
+      console.error(
+        'Upload failed:',
+        error
+      );
 
       alert(
         error.message ||
@@ -246,7 +510,7 @@ function App() {
 
       setBusy(false);
 
-      // Allow same file to be selected again.
+      // Allow the same file to be selected again.
       event.target.value = '';
 
     }
@@ -264,13 +528,13 @@ function App() {
         'Delete all local documents, facts and relationships?'
       );
 
-
     if (!confirmed) {
       return;
     }
 
-
     try {
+
+      setBusy(true);
 
       await api(
         '/api/reset',
@@ -279,22 +543,31 @@ function App() {
         }
       );
 
-
       await load();
-
 
       setSelected(null);
 
+      setAnalysisMessage('');
+
       setMobileMenuOpen(false);
+
+      setTab('Overview');
 
     } catch (error) {
 
-      console.error(error);
+      console.error(
+        'Reset failed:',
+        error
+      );
 
       alert(
         error.message ||
         'Failed to reset data.'
       );
+
+    } finally {
+
+      setBusy(false);
 
     }
   };
@@ -339,11 +612,9 @@ function App() {
     const search =
       q.trim().toLowerCase();
 
-
     if (!search) {
       return facts;
     }
-
 
     return facts.filter(
       (fact) => {
@@ -368,13 +639,9 @@ function App() {
 
           fact.normalized_unit,
 
-          ...(Array.isArray(fact.entities)
-            ? fact.entities
-            : []),
+          ...asArray(fact.entities),
 
-          ...(Array.isArray(fact.dates)
-            ? fact.dates
-            : [])
+          ...asArray(fact.dates)
 
         ]
           .filter(
@@ -385,7 +652,6 @@ function App() {
           .join(' ')
           .toLowerCase();
 
-
         return searchable.includes(
           search
         );
@@ -395,10 +661,49 @@ function App() {
   }, [facts, q]);
 
 
+  /* =======================================================
+     DERIVED COUNTS
+  ======================================================= */
+
+  const relationCounts =
+    useMemo(() => {
+
+      const result = {
+        CORROBORATES: 0,
+        CONTRADICTS: 0,
+        RECONCILES: 0,
+        RELATED: 0,
+        UNCERTAIN: 0
+      };
+
+      rels.forEach(
+        (relationship) => {
+
+          const name =
+            relationName(
+              relationship.relation
+            );
+
+          if (
+            Object.prototype.hasOwnProperty.call(
+              result,
+              name
+            )
+          ) {
+            result[name] += 1;
+          }
+
+        }
+      );
+
+      return result;
+
+    }, [rels]);
+
+
   return (
 
     <div className="app">
-
 
       {/* ===================================================
           DESKTOP SIDEBAR
@@ -471,8 +776,16 @@ function App() {
           <button
             className="nav"
             onClick={refresh}
+            disabled={busy || analysisBusy}
           >
-            <RefreshCw />
+            <RefreshCw
+              className={
+                analysisBusy
+                  ? 'spin'
+                  : ''
+              }
+            />
+
             Refresh
           </button>
 
@@ -480,8 +793,10 @@ function App() {
           <button
             className="nav danger"
             onClick={reset}
+            disabled={busy || analysisBusy}
           >
             <Trash2 />
+
             Reset data
           </button>
 
@@ -627,7 +942,6 @@ function App() {
 
       <main>
 
-
         {/* Mobile menu */}
 
         <button
@@ -667,26 +981,104 @@ function App() {
           </div>
 
 
-          <label className="upload">
+          <div className="header-actions">
 
-            <Upload />
+            <button
+              className="analyze-button"
+              onClick={() => analyze(true)}
+              disabled={
+                analysisBusy ||
+                facts.length < 2
+              }
+              title={
+                facts.length < 2
+                  ? 'Upload at least two facts first'
+                  : 'Run cross-document relationship analysis'
+              }
+            >
 
-            {busy
-              ? 'Processing…'
-              : 'Upload PDFs'}
+              {analysisBusy ? (
+                <RefreshCw className="spin" />
+              ) : (
+                <Play />
+              )}
+
+              {analysisBusy
+                ? 'Analyzing…'
+                : 'Analyze'}
+
+            </button>
 
 
-            <input
-              type="file"
-              accept=".pdf"
-              multiple
-              onChange={upload}
-              disabled={busy}
-            />
+            <label
+              className={
+                busy
+                  ? 'upload disabled'
+                  : 'upload'
+              }
+            >
 
-          </label>
+              <Upload />
+
+              {busy
+                ? 'Uploading…'
+                : 'Upload PDFs'}
+
+
+              <input
+                type="file"
+                accept=".pdf,application/pdf"
+                multiple
+                onChange={upload}
+                disabled={
+                  busy ||
+                  analysisBusy
+                }
+              />
+
+            </label>
+
+          </div>
 
         </header>
+
+
+        {/* =================================================
+            GLOBAL STATUS
+        ================================================= */}
+
+        {loadError && (
+
+          <div className="warning">
+
+            <AlertTriangle />
+
+            <span>
+              {loadError}
+            </span>
+
+          </div>
+
+        )}
+
+
+        {analysisMessage && (
+
+          <div className="analysis-status">
+
+            {analysisBusy ? (
+              <RefreshCw className="spin" />
+            ) : (
+              <CheckCircle2 />
+            )}
+
+            <span>
+              {analysisMessage}
+            </span>
+
+          </div>
+
+        )}
 
 
         {/* =================================================
@@ -743,22 +1135,53 @@ function App() {
 
               <section className="panel">
 
-                <h2>
-                  Relationship summary
-                </h2>
+                <div className="section-heading">
+
+                  <div>
+
+                    <h2>
+                      Relationship summary
+                    </h2>
+
+                    <small className="muted">
+                      Cross-document reasoning results
+                    </small>
+
+                  </div>
+
+
+                  <button
+                    className="small-button"
+                    onClick={() => analyze(true)}
+                    disabled={
+                      analysisBusy ||
+                      facts.length < 2
+                    }
+                  >
+
+                    <Play size={15} />
+
+                    Analyze
+
+                  </button>
+
+                </div>
 
 
                 {rels.length === 0 ? (
 
                   <div className="empty">
 
-                    No relationships found yet.
+                    <Network />
 
-                    <br />
+                    <span>
+                      No relationships found yet.
+                    </span>
 
-                    Upload multiple related PDFs
-                    to build cross-document
-                    relationships.
+                    <small>
+                      Upload multiple related PDFs,
+                      then run analysis.
+                    </small>
 
                   </div>
 
@@ -794,9 +1217,23 @@ function App() {
 
           <section className="panel">
 
-            <h2>
-              Documents
-            </h2>
+            <div className="section-heading">
+
+              <div>
+
+                <h2>
+                  Documents
+                </h2>
+
+                <small className="muted">
+                  {docs.length} document
+                  {docs.length === 1 ? '' : 's'} ingested
+                </small>
+
+              </div>
+
+            </div>
+
 
             <DocTable
               docs={docs}
@@ -817,9 +1254,20 @@ function App() {
 
             <div className="toolbar">
 
-              <h2>
-                Facts
-              </h2>
+              <div>
+
+                <h2>
+                  Facts
+                </h2>
+
+                <small className="muted">
+                  {filteredFacts.length}
+                  {' '}
+                  matching fact
+                  {filteredFacts.length === 1 ? '' : 's'}
+                </small>
+
+              </div>
 
 
               <input
@@ -837,7 +1285,15 @@ function App() {
 
               <div className="empty">
 
-                No facts found.
+                <Search />
+
+                <span>
+                  No facts found.
+                </span>
+
+                <small>
+                  Upload a PDF or change the search.
+                </small>
 
               </div>
 
@@ -872,21 +1328,72 @@ function App() {
 
           <section className="panel">
 
-            <h2>
-              Cross-document relationships
-            </h2>
+            <div className="section-heading">
+
+              <div>
+
+                <h2>
+                  Cross-document relationships
+                </h2>
+
+                <small className="muted">
+                  {rels.length}
+                  {' '}
+                  relationship
+                  {rels.length === 1 ? '' : 's'}
+                </small>
+
+              </div>
+
+
+              <button
+                className="small-button"
+                onClick={() => analyze(true)}
+                disabled={
+                  analysisBusy ||
+                  facts.length < 2
+                }
+              >
+
+                {analysisBusy ? (
+                  <RefreshCw
+                    size={15}
+                    className="spin"
+                  />
+                ) : (
+                  <Play size={15} />
+                )}
+
+                {analysisBusy
+                  ? 'Analyzing…'
+                  : 'Re-analyze'}
+
+              </button>
+
+            </div>
 
 
             {rels.length === 0 ? (
 
               <div className="empty">
 
-                No relationships found.
+                <Network />
 
-                <br />
+                <span>
+                  No relationships found.
+                </span>
 
-                Upload two or more related PDFs
-                to compare facts.
+                <small>
+                  Upload two or more related PDFs
+                  and run analysis.
+                </small>
+
+                {facts.length < 2 && (
+                  <small>
+                    At least two extracted facts
+                    are required.
+                  </small>
+                )}
 
               </div>
 
@@ -1044,7 +1551,8 @@ function App() {
 
               <p>
                 {selected.evidence ||
-                  selected.text}
+                  selected.text ||
+                  'No source evidence available.'}
               </p>
 
             </div>
@@ -1058,9 +1566,11 @@ function App() {
 
                 Confidence{' '}
 
-                {typeof selected.confidence === 'number'
+                {asNumber(selected.confidence) !== null
                   ? `${(
-                      selected.confidence * 100
+                      Number(
+                        selected.confidence
+                      ) * 100
                     ).toFixed(0)}%`
                   : '—'}
 
@@ -1088,72 +1598,67 @@ function App() {
 
             {/* Time */}
 
-            {selected.dates &&
-              selected.dates.length > 0 && (
+            {asArray(selected.dates).length > 0 && (
 
-                <div className="inspector-section">
+              <div className="inspector-section">
 
-                  <b>
-                    Time / Date Context
-                  </b>
+                <b>
+                  Time / Date Context
+                </b>
 
-                  <p>
+                <p>
 
-                    {Array.isArray(
-                      selected.dates
-                    )
-                      ? selected.dates.join(', ')
-                      : selected.dates}
+                  {asArray(
+                    selected.dates
+                  ).join(', ')}
 
-                  </p>
+                </p>
 
-                </div>
+              </div>
 
-              )}
+            )}
 
 
             {/* Entities */}
 
-            {selected.entities &&
-              selected.entities.length > 0 && (
+            {asArray(selected.entities).length > 0 && (
 
-                <div className="inspector-section">
+              <div className="inspector-section">
 
-                  <b>
-                    Entities
-                  </b>
+                <b>
+                  Entities
+                </b>
 
-                  <p>
+                <p>
 
-                    {Array.isArray(
-                      selected.entities
-                    )
-                      ? selected.entities.join(', ')
-                      : selected.entities}
+                  {asArray(
+                    selected.entities
+                  ).join(', ')}
 
-                  </p>
+                </p>
 
-                </div>
+              </div>
 
-              )}
+            )}
 
 
             {/* Warnings */}
 
-            {selected.warnings &&
-              selected.warnings.length > 0 && (
+            {asArray(selected.warnings).length > 0 && (
 
-                <div className="warning">
+              <div className="warning">
 
-                  <AlertTriangle />
+                <AlertTriangle />
 
-                  <span>
-                    {selected.warnings.join('; ')}
-                  </span>
+                <span>
+                  {asArray(
+                    selected.warnings
+                  ).join('; ')}
+                </span>
 
-                </div>
+              </div>
 
-              )}
+            )}
 
           </div>
 
@@ -1240,68 +1745,77 @@ function DocTable({
           </div>
 
 
-          {docs.map((document) => (
+          {docs.map((document) => {
 
-            <div
-              className="tr"
-              key={document.id}
-            >
+            const pages =
+              asNumber(
+                document.page_count
+              );
 
-              <span>
+            const factCount =
+              asNumber(
+                document.fact_count
+              );
 
-                <b>
-                  {document.filename}
-                </b>
+            return (
 
+              <div
+                className="tr"
+                key={document.id}
+              >
 
-                <small>
+                <span>
 
-                  {document.sha256
-                    ? document.sha256.slice(0, 12) + '…'
-                    : ''}
-
-                </small>
-
-              </span>
-
-
-              {/* =========================================
-                  REAL PDF PAGE COUNT
-              ========================================= */}
-
-              <span>
-                {Number.isFinite(
-                  Number(document.page_count)
-                )
-                  ? Number(document.page_count)
-                  : 0}
-              </span>
+                  <b>
+                    {document.filename}
+                  </b>
 
 
-              {/* =========================================
-                  FACT COUNT
-              ========================================= */}
+                  <small>
 
-              <span>
-                {Number.isFinite(
-                  Number(document.fact_count)
-                )
-                  ? Number(document.fact_count)
-                  : 0}
-              </span>
+                    {document.sha256
+                      ? document.sha256.slice(
+                          0,
+                          12
+                        ) + '…'
+                      : ''}
+
+                  </small>
+
+                </span>
 
 
-              <span>
+                {/* REAL PDF PAGE COUNT */}
 
-                <Badge type="ready">
-                  Ready
-                </Badge>
+                <span>
+                  {pages !== null
+                    ? pages
+                    : '—'}
+                </span>
 
-              </span>
 
-            </div>
+                {/* FACT COUNT */}
 
-          ))}
+                <span>
+                  {factCount !== null
+                    ? factCount
+                    : '—'}
+                </span>
+
+
+                <span>
+
+                  <Badge type="ready">
+                    Ready
+                  </Badge>
+
+                </span>
+
+              </div>
+
+            );
+
+          })}
 
         </>
 
@@ -1309,11 +1823,15 @@ function DocTable({
 
         <div className="empty">
 
-          No documents yet.
+          <FileText />
 
-          <br />
+          <span>
+            No documents yet.
+          </span>
 
-          Upload PDFs to begin.
+          <small>
+            Upload PDFs to begin.
+          </small>
 
         </div>
 
@@ -1350,6 +1868,22 @@ function Fact({
     <article
       className="fact"
       onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+
+        if (
+          event.key === 'Enter' ||
+          event.key === ' '
+        ) {
+
+          event.preventDefault();
+
+          onClick();
+
+        }
+
+      }}
     >
 
       <div>
@@ -1378,7 +1912,9 @@ function Fact({
 
 
       <p>
-        {f.evidence}
+        {f.evidence ||
+          f.text ||
+          'No evidence available.'}
       </p>
 
 
@@ -1403,9 +1939,11 @@ function Fact({
 
         Confidence{' '}
 
-        {typeof f.confidence === 'number'
+        {asNumber(f.confidence) !== null
           ? `${(
-              f.confidence * 100
+              Number(
+                f.confidence
+              ) * 100
             ).toFixed(0)}%`
           : '—'}
 
@@ -1441,27 +1979,41 @@ function Rel({
   detailed = false
 }) {
 
+  const relation =
+    relationName(
+      r.relation
+    ) || 'RELATED';
+
+
+  const signals =
+    r.signals && typeof r.signals === 'object'
+      ? r.signals
+      : {};
+
+
+  const signalEntries =
+    Object.entries(
+      signals
+    );
+
+
   return (
 
     <article className="rel">
 
       <div className="relhead">
 
-        <Badge type={r.relation}>
+        <Badge type={relation}>
 
-          {r.relation ||
-            'RELATED'}
+          {relation}
 
         </Badge>
 
 
         <span>
 
-          {typeof r.score === 'number'
-            ? `${(
-                r.score * 100
-              ).toFixed(0)}% match`
-            : '—'}
+          {formatScore(r.score)}
+          {' '}match
 
         </span>
 
@@ -1471,24 +2023,71 @@ function Rel({
       <div className="pair">
 
 
-        <div>
+        {/* =================================================
+            FACT A
+        ================================================= */}
 
-          <b>
-            {r.document_a ||
-              'Document A'}
-          </b>
+        <div className="relation-fact">
+
+          <div className="relation-source">
+
+            <b>
+              {r.document_a ||
+                'Document A'}
+            </b>
+
+            <small>
+              page {r.page_a ?? '—'}
+            </small>
+
+          </div>
 
 
-          <small>
-            p.{r.page_a ?? '—'}
-          </small>
+          <div className="relation-label">
+            Fact A
+          </div>
 
 
-          <p>
-            {r.evidence_a ||
-              r.fact_text_a ||
-              'No evidence available.'}
+          <p className="relation-fact-text">
+
+            {r.fact_text_a ||
+              r.evidence_a ||
+              'No fact text available.'}
+
           </p>
+
+
+          <div className="evidence">
+
+            <b>
+              Source Evidence
+            </b>
+
+            <p>
+              {r.evidence_a ||
+                r.fact_text_a ||
+                'No evidence available.'}
+            </p>
+
+          </div>
+
+
+          {(r.value_a !== null &&
+            r.value_a !== undefined) && (
+
+            <small className="relation-value">
+
+              Value:{' '}
+
+              {r.value_a}
+
+              {' '}
+
+              {r.unit_a || ''}
+
+            </small>
+
+          )}
 
         </div>
 
@@ -1498,44 +2097,192 @@ function Rel({
         </div>
 
 
-        <div>
+        {/* =================================================
+            FACT B
+        ================================================= */}
 
-          <b>
-            {r.document_b ||
-              'Document B'}
-          </b>
+        <div className="relation-fact">
+
+          <div className="relation-source">
+
+            <b>
+              {r.document_b ||
+                'Document B'}
+            </b>
+
+            <small>
+              page {r.page_b ?? '—'}
+            </small>
+
+          </div>
 
 
-          <small>
-            p.{r.page_b ?? '—'}
-          </small>
+          <div className="relation-label">
+            Fact B
+          </div>
 
 
-          <p>
-            {r.evidence_b ||
-              r.fact_text_b ||
-              'No evidence available.'}
+          <p className="relation-fact-text">
+
+            {r.fact_text_b ||
+              r.evidence_b ||
+              'No fact text available.'}
+
           </p>
+
+
+          <div className="evidence">
+
+            <b>
+              Source Evidence
+            </b>
+
+            <p>
+              {r.evidence_b ||
+                r.fact_text_b ||
+                'No evidence available.'}
+            </p>
+
+          </div>
+
+
+          {(r.value_b !== null &&
+            r.value_b !== undefined) && (
+
+            <small className="relation-value">
+
+              Value:{' '}
+
+              {r.value_b}
+
+              {' '}
+
+              {r.unit_b || ''}
+
+            </small>
+
+          )}
 
         </div>
 
       </div>
 
 
+      {/* =================================================
+          REASONING
+      ================================================= */}
+
       {detailed && (
 
-        <p className="explain">
+        <div className="relationship-reasoning">
 
-          {r.explanation ||
-            'No explanation available.'}
+          <div className="explain">
 
-        </p>
+            <b>
+              Reasoning
+            </b>
+
+            <p>
+              {r.explanation ||
+                'No explanation available.'}
+            </p>
+
+          </div>
+
+
+          {signalEntries.length > 0 && (
+
+            <div className="signals">
+
+              <b>
+                Reasoning signals
+              </b>
+
+              <div className="signal-list">
+
+                {signalEntries.map(
+                  ([name, value]) => (
+
+                    <span
+                      className="signal"
+                      key={name}
+                    >
+
+                      <strong>
+                        {name}
+                      </strong>
+
+                      <span>
+                        {formatSignalValue(value)}
+                      </span>
+
+                    </span>
+
+                  )
+                )}
+
+              </div>
+
+            </div>
+
+          )}
+
+        </div>
 
       )}
 
     </article>
 
   );
+}
+
+
+/* =========================================================
+   SIGNAL FORMATTER
+========================================================= */
+
+function formatSignalValue(value) {
+
+  if (
+    typeof value === 'boolean'
+  ) {
+    return value
+      ? 'yes'
+      : 'no';
+  }
+
+  if (
+    typeof value === 'number'
+  ) {
+
+    if (
+      value >= 0 &&
+      value <= 1
+    ) {
+
+      return `${(
+        value * 100
+      ).toFixed(0)}%`;
+
+    }
+
+    return String(value);
+  }
+
+  if (
+    Array.isArray(value)
+  ) {
+    return value.join(', ');
+  }
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return '—';
+  }
+
+  return String(value);
 }
 
 
@@ -1548,6 +2295,10 @@ function Evaluation({
   facts
 }) {
 
+  /* =======================================================
+     RELATION COUNTS
+  ======================================================= */
+
   const counts = useMemo(() => {
 
     const result = {
@@ -1558,15 +2309,13 @@ function Evaluation({
       UNCERTAIN: 0
     };
 
-
     rels.forEach(
       (relationship) => {
 
         const relation =
-          String(
-            relationship.relation || ''
-          ).toUpperCase();
-
+          relationName(
+            relationship.relation
+          );
 
         if (
           Object.prototype.hasOwnProperty.call(
@@ -1582,99 +2331,630 @@ function Evaluation({
       }
     );
 
-
     return result;
 
   }, [rels]);
 
 
+  /* =======================================================
+     CASE 1
+     Delhivery FY24 revenue
+  ======================================================= */
+
+  const case1 = useMemo(() => {
+
+    const matching =
+      rels.find(
+        (r) => {
+
+          const combined =
+            normalizeText(
+              [
+                r.document_a,
+                r.document_b,
+                r.fact_text_a,
+                r.fact_text_b,
+                r.evidence_a,
+                r.evidence_b,
+                r.explanation
+              ].join(' ')
+            );
+
+          const revenue =
+            combined.includes(
+              'revenue'
+            );
+
+          const delhivery =
+            combined.includes(
+              'delhivery'
+            );
+
+          const million =
+            combined.includes(
+              '81415'
+            ) ||
+            combined.includes(
+              '81 415'
+            );
+
+          const crore =
+            combined.includes(
+              '8142'
+            ) ||
+            combined.includes(
+              '8141.5'
+            );
+
+          return (
+            revenue &&
+            delhivery &&
+            million &&
+            crore
+          );
+
+        }
+      );
+
+    if (matching) {
+      return {
+        status:
+          relationName(
+            matching.relation
+          ),
+        relationship:
+          matching
+      };
+    }
+
+    /*
+     * If the exact relationship is not found,
+     * inspect the underlying facts so the UI can
+     * distinguish "not found" from "wrong result".
+     */
+
+    const relevantFacts =
+      facts.filter(
+        (fact) => {
+
+          const text =
+            normalizeText(
+              [
+                fact.filename,
+                fact.text,
+                fact.evidence,
+                fact.value,
+                fact.unit
+              ].join(' ')
+            );
+
+          return (
+            text.includes('revenue') &&
+            (
+              text.includes('81415') ||
+              text.includes('8142')
+            )
+          );
+
+        }
+      );
+
+    return {
+      status: 'NOT_DETECTED',
+      relationship: null,
+      facts: relevantFacts
+    };
+
+  }, [rels, facts]);
+
+
+  /* =======================================================
+     CASE 2
+     India FY25 GDP 6.4 vs 6.5
+  ======================================================= */
+
+  const case2 = useMemo(() => {
+
+    const matching =
+      rels.find(
+        (r) => {
+
+          const combined =
+            normalizeText(
+              [
+                r.document_a,
+                r.document_b,
+                r.fact_text_a,
+                r.fact_text_b,
+                r.evidence_a,
+                r.evidence_b,
+                r.explanation
+              ].join(' ')
+            );
+
+          const gdp =
+            combined.includes('gdp');
+
+          const india =
+            combined.includes('india');
+
+          const fy25 =
+            combined.includes('fy25') ||
+            combined.includes('2024/25') ||
+            combined.includes('2024 25');
+
+          const values =
+            (
+              combined.includes('6.4') ||
+              combined.includes('64')
+            ) &&
+            (
+              combined.includes('6.5') ||
+              combined.includes('65')
+            );
+
+          return (
+            gdp &&
+            india &&
+            fy25 &&
+            values
+          );
+
+        }
+      );
+
+    if (matching) {
+      return {
+        status:
+          relationName(
+            matching.relation
+          ),
+        relationship:
+          matching
+      };
+    }
+
+    return {
+      status: 'NOT_DETECTED',
+      relationship: null
+    };
+
+  }, [rels]);
+
+
+  /* =======================================================
+     CASE 3
+     Q1/Q2/H1 vs FY25
+  ======================================================= */
+
+  const case3 = useMemo(() => {
+
+    const matching =
+      rels.find(
+        (r) => {
+
+          const combined =
+            normalizeText(
+              [
+                r.document_a,
+                r.document_b,
+                r.fact_text_a,
+                r.fact_text_b,
+                r.evidence_a,
+                r.evidence_b,
+                r.explanation
+              ].join(' ')
+            );
+
+          const gdp =
+            combined.includes('gdp');
+
+          const quarterOrHalf =
+            combined.includes('q1') ||
+            combined.includes('q2') ||
+            combined.includes('first half') ||
+            combined.includes('h1');
+
+          const annual =
+            combined.includes('fy25') ||
+            combined.includes('2024/25') ||
+            combined.includes('annual');
+
+          return (
+            gdp &&
+            quarterOrHalf &&
+            annual
+          );
+
+        }
+      );
+
+    if (matching) {
+      return {
+        status:
+          relationName(
+            matching.relation
+          ),
+        relationship:
+          matching
+      };
+    }
+
+    return {
+      status: 'NOT_DETECTED',
+      relationship: null
+    };
+
+  }, [rels]);
+
+
+  /* =======================================================
+     CASE 4
+     Mobility vs promotion semantic separation
+  ======================================================= */
+
+  const case4 = useMemo(() => {
+
+    const mobilityFacts =
+      facts.filter(
+        (fact) => {
+
+          const text =
+            normalizeText(
+              [
+                fact.text,
+                fact.evidence,
+                fact.predicate,
+                fact.subject
+              ].join(' ')
+            );
+
+          return (
+            text.includes(
+              'internal mobility'
+            ) ||
+            text.includes(
+              'mobility'
+            )
+          );
+
+        }
+      );
+
+    const promotionFacts =
+      facts.filter(
+        (fact) => {
+
+          const text =
+            normalizeText(
+              [
+                fact.text,
+                fact.evidence,
+                fact.predicate,
+                fact.subject
+              ].join(' ')
+            );
+
+          return (
+            text.includes(
+              'promoted'
+            ) ||
+            text.includes(
+              'promotion'
+            )
+          );
+
+        }
+      );
+
+
+    /*
+     * Correct behavior:
+     *
+     * 1,509 employees moved through internal mobility.
+     * 423 employees were promoted.
+     *
+     * These are different predicates/topics.
+     * They must NOT be treated as a numerical contradiction.
+     */
+
+    const falseContradiction =
+      rels.some(
+        (r) => {
+
+          const combined =
+            normalizeText(
+              [
+                r.fact_text_a,
+                r.fact_text_b,
+                r.evidence_a,
+                r.evidence_b
+              ].join(' ')
+            );
+
+          const mobility =
+            combined.includes(
+              'mobility'
+            );
+
+          const promotion =
+            combined.includes(
+              'promoted'
+            ) ||
+            combined.includes(
+              'promotion'
+            );
+
+          return (
+            mobility &&
+            promotion &&
+            relationName(
+              r.relation
+            ) === 'CONTRADICTS'
+          );
+
+        }
+      );
+
+
+    return {
+      mobilityFacts,
+      promotionFacts,
+      falseContradiction
+    };
+
+  }, [facts, rels]);
+
+
   return (
 
-    <div className="grid">
+    <div className="evaluation-page">
 
 
       {/* =================================================
-          REQUIRED BENCHMARK CASES
+          EVALUATION HEADER
       ================================================= */}
 
-      <section className="panel">
+      <section className="panel evaluation-intro">
 
-        <h2>
-          Required benchmark cases
-        </h2>
+        <div>
 
-
-        <div className="eval">
-
-          <b>
-            1 · Corroborated fact
-          </b>
+          <h2>
+            Benchmark evaluation
+          </h2>
 
           <p>
-            Delhivery FY24 revenue:
-            ₹81,415m ↔ ₹8,142cr.
+            The four required assignment cases are
+            checked against the actual extracted facts
+            and cross-document reasoning results.
           </p>
 
-          <Badge type="corroborates">
-            CORROBORATES
+        </div>
+
+
+        <div className="evaluation-status">
+
+          <CheckCircle2 />
+
+          <span>
+            {facts.length > 0
+              ? 'Live evaluation'
+              : 'Waiting for documents'}
+          </span>
+
+        </div>
+
+      </section>
+
+
+      {/* =================================================
+          CASE 1
+      ================================================= */}
+
+      <EvaluationCase
+        number="1"
+        title="Corroborated fact"
+        description={
+          'Delhivery FY24 revenue: ₹81,415 million ' +
+          'in the annual report versus ₹8,142 crore ' +
+          'in the earnings presentation.'
+        }
+        expected="CORROBORATES"
+        result={case1.status}
+        relationship={case1.relationship}
+        success={
+          case1.status === 'CORROBORATES'
+        }
+        sourceFacts={case1.facts}
+      />
+
+
+      {/* =================================================
+          CASE 2
+      ================================================= */}
+
+      <EvaluationCase
+        number="2"
+        title="Genuine / likely contradiction"
+        description={
+          'India FY25 GDP growth is reported as ' +
+          '6.4% in the Economic Survey and 6.5% ' +
+          'in the IMF Article IV material.'
+        }
+        expected="CONTRADICTS"
+        result={case2.status}
+        relationship={case2.relationship}
+        success={
+          case2.status === 'CONTRADICTS'
+        }
+      />
+
+
+      {/* =================================================
+          CASE 3
+      ================================================= */}
+
+      <EvaluationCase
+        number="3"
+        title="Apparent contradiction explained by scope"
+        description={
+          'Q1/Q2/H1 GDP figures and the full FY25 ' +
+          'GDP figure represent different time scopes, ' +
+          'so they should be reconciled rather than ' +
+          'treated as direct contradictions.'
+        }
+        expected="RECONCILES"
+        result={case3.status}
+        relationship={case3.relationship}
+        success={
+          case3.status === 'RECONCILES'
+        }
+      />
+
+
+      {/* =================================================
+          CASE 4
+      ================================================= */}
+
+      <section className="panel evaluation-case">
+
+        <div className="eval-case-header">
+
+          <div className="case-number">
+            4
+          </div>
+
+          <div>
+
+            <h3>
+              Extraction / reasoning failure
+            </h3>
+
+            <p>
+              The nearby “internal mobility” and
+              “promoted” facts must remain separate.
+              1,509 must not be attached to the
+              promotion statement of 423 employees.
+            </p>
+
+          </div>
+
+          <Badge
+            type={
+              case4.falseContradiction
+                ? 'contradicts'
+                : 'corroborates'
+            }
+          >
+            {case4.falseContradiction
+              ? 'FAILED'
+              : 'HANDLED'}
           </Badge>
 
         </div>
 
 
-        <div className="eval">
+        <div className="failure-grid">
 
-          <b>
-            2 · Genuine / likely contradiction
-          </b>
+          <div className="eval-evidence">
 
-          <p>
-            India FY25 GDP:
-            6.4% ↔ 6.5%.
-          </p>
+            <b>
+              Internal mobility
+            </b>
 
-          <Badge type="contradicts">
-            LIKELY CONTRADICTION
-          </Badge>
+            {case4.mobilityFacts.length === 0 ? (
+
+              <p className="muted">
+                Source fact not detected.
+              </p>
+
+            ) : (
+
+              case4.mobilityFacts
+                .slice(0, 3)
+                .map((fact) => (
+
+                  <div
+                    className="mini-evidence"
+                    key={fact.id}
+                  >
+
+                    <span>
+                      {fact.filename}
+                      {' · '}
+                      p.{fact.page}
+                    </span>
+
+                    <p>
+                      {fact.evidence ||
+                        fact.text}
+                    </p>
+
+                  </div>
+
+                ))
+
+            )}
+
+          </div>
+
+
+          <div className="eval-evidence">
+
+            <b>
+              Promotion
+            </b>
+
+            {case4.promotionFacts.length === 0 ? (
+
+              <p className="muted">
+                Source fact not detected.
+              </p>
+
+            ) : (
+
+              case4.promotionFacts
+                .slice(0, 3)
+                .map((fact) => (
+
+                  <div
+                    className="mini-evidence"
+                    key={fact.id}
+                  >
+
+                    <span>
+                      {fact.filename}
+                      {' · '}
+                      p.{fact.page}
+                    </span>
+
+                    <p>
+                      {fact.evidence ||
+                        fact.text}
+                    </p>
+
+                  </div>
+
+                ))
+
+            )}
+
+          </div>
 
         </div>
 
 
-        <div className="eval">
+        <div className="eval-note">
 
-          <b>
-            3 · Apparent contradiction
-            explained by scope
-          </b>
+          <Info />
 
-          <p>
-            Q1/Q2/H1 GDP vs full FY25 GDP.
-            These represent different time scopes.
-          </p>
+          <span>
 
-          <Badge type="reconciles">
-            RECONCILES
-          </Badge>
+            Expected behavior: the two facts are
+            semantically distinct and should not
+            create a numerical contradiction.
 
-        </div>
-
-
-        <div className="eval">
-
-          <b>
-            4 · Extraction / reasoning failure
-          </b>
-
-          <p>
-            Nearby “internal mobility”
-            and “promoted” facts must remain
-            separate rather than assigning
-            1,509 to the promotion statement.
-          </p>
-
-          <Badge type="related">
-            HANDLED WITH WARNINGS
-          </Badge>
+          </span>
 
         </div>
 
@@ -1687,61 +2967,300 @@ function Evaluation({
 
       <section className="panel">
 
-        <h2>
-          Observed relationships
-        </h2>
+        <div className="section-heading">
 
+          <div>
 
-        {Object.entries(counts).map(
-          ([name, count]) => (
+            <h2>
+              Observed relationships
+            </h2>
 
-            <div
-              className="count"
-              key={name}
-            >
+            <small className="muted">
+              Results from the actual reasoning engine
+            </small>
 
-              <span>
-                {name}
-              </span>
-
-              <strong>
-                {count}
-              </strong>
-
-            </div>
-
-          )
-        )}
-
-
-        <div className="count">
-
-          <span>
-            Total facts
-          </span>
-
-          <strong>
-            {facts.length}
-          </strong>
+          </div>
 
         </div>
 
 
-        <div className="count">
+        <div className="count-grid">
 
-          <span>
-            Total relationships
-          </span>
+          {Object.entries(
+            counts
+          ).map(
+            ([name, count]) => (
 
-          <strong>
-            {rels.length}
-          </strong>
+              <div
+                className="count"
+                key={name}
+              >
+
+                <span>
+                  {name}
+                </span>
+
+                <strong>
+                  {count}
+                </strong>
+
+              </div>
+
+            )
+          )}
+
+
+          <div className="count">
+
+            <span>
+              Total facts
+            </span>
+
+            <strong>
+              {facts.length}
+            </strong>
+
+          </div>
+
+
+          <div className="count">
+
+            <span>
+              Total relationships
+            </span>
+
+            <strong>
+              {rels.length}
+            </strong>
+
+          </div>
 
         </div>
 
       </section>
 
     </div>
+
+  );
+}
+
+
+/* =========================================================
+   EVALUATION CASE COMPONENT
+========================================================= */
+
+function EvaluationCase({
+  number,
+  title,
+  description,
+  expected,
+  result,
+  success,
+  relationship,
+  sourceFacts = []
+}) {
+
+  const hasResult =
+    Boolean(
+      relationship
+    );
+
+
+  return (
+
+    <section className="panel evaluation-case">
+
+      <div className="eval-case-header">
+
+        <div className="case-number">
+          {number}
+        </div>
+
+        <div>
+
+          <h3>
+            {title}
+          </h3>
+
+          <p>
+            {description}
+          </p>
+
+        </div>
+
+
+        <Badge
+          type={
+            success
+              ? expected
+              : result === 'NOT_DETECTED'
+                ? 'uncertain'
+                : 'contradicts'
+          }
+        >
+
+          {success
+            ? 'PASS'
+            : result === 'NOT_DETECTED'
+              ? 'NOT DETECTED'
+              : `FOUND: ${result}`}
+
+        </Badge>
+
+      </div>
+
+
+      <div className="evaluation-result">
+
+        <div>
+
+          <span>
+            Expected reasoning
+          </span>
+
+          <strong>
+            {expected}
+          </strong>
+
+        </div>
+
+
+        <div>
+
+          <span>
+            Actual reasoning
+          </span>
+
+          <strong>
+            {result || '—'}
+          </strong>
+
+        </div>
+
+      </div>
+
+
+      {hasResult && (
+
+        <div className="evaluation-evidence">
+
+          <div className="eval-source">
+
+            <b>
+              Source A
+            </b>
+
+            <span>
+              {relationship.document_a}
+              {' · '}
+              page {relationship.page_a}
+            </span>
+
+            <p>
+              {relationship.evidence_a ||
+                relationship.fact_text_a}
+            </p>
+
+          </div>
+
+
+          <div className="eval-source">
+
+            <b>
+              Source B
+            </b>
+
+            <span>
+              {relationship.document_b}
+              {' · '}
+              page {relationship.page_b}
+            </span>
+
+            <p>
+              {relationship.evidence_b ||
+                relationship.fact_text_b}
+            </p>
+
+          </div>
+
+        </div>
+
+      )}
+
+
+      {hasResult && (
+
+        <div className="eval-reasoning">
+
+          <b>
+            Reasoning
+          </b>
+
+          <p>
+            {relationship.explanation ||
+              'No explanation returned by the reasoning engine.'}
+          </p>
+
+        </div>
+
+      )}
+
+
+      {!hasResult &&
+        sourceFacts.length > 0 && (
+
+          <div className="evaluation-evidence">
+
+            {sourceFacts
+              .slice(0, 2)
+              .map((fact) => (
+
+                <div
+                  className="eval-source"
+                  key={fact.id}
+                >
+
+                  <b>
+                    Detected source fact
+                  </b>
+
+                  <span>
+                    {fact.filename}
+                    {' · '}
+                    page {fact.page}
+                  </span>
+
+                  <p>
+                    {fact.evidence ||
+                      fact.text}
+                  </p>
+
+                </div>
+
+              ))}
+
+          </div>
+
+        )}
+
+
+      {!hasResult &&
+        sourceFacts.length === 0 && (
+
+          <div className="eval-note">
+
+            <Clock />
+
+            <span>
+              Run analysis after uploading the
+              starter dataset to evaluate this case.
+            </span>
+
+          </div>
+
+        )}
+
+    </section>
 
   );
 }
