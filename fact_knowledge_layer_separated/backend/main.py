@@ -57,6 +57,7 @@ def health():
 
 @app.on_event("startup")
 def startup():
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
 
 
@@ -68,15 +69,35 @@ def startup():
 async def upload_documents(
     files: list[UploadFile] = File(...)
 ):
+    """
+    Upload and ingest one or more PDFs.
+
+    Important:
+    Relationship analysis is NOT executed here.
+
+    The endpoint only:
+        1. validates the files
+        2. saves them
+        3. extracts facts
+        4. stores documents + facts
+        5. returns immediately
+
+    This prevents slow uploads when many facts already exist.
+    """
+
     if not files:
         raise HTTPException(
             status_code=400,
-            detail="At least one PDF file is required."
+            detail="At least one PDF file is required.",
         )
 
     results = []
 
     for upload in files:
+
+        # ----------------------------------------------------
+        # Validate filename
+        # ----------------------------------------------------
 
         if (
             not upload.filename
@@ -84,7 +105,10 @@ async def upload_documents(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Only PDF files are accepted."
+                detail=(
+                    f"Only PDF files are accepted: "
+                    f"{upload.filename or 'unnamed file'}"
+                ),
             )
 
         safe_name = Path(upload.filename).name
@@ -92,19 +116,37 @@ async def upload_documents(
         if not safe_name:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid PDF filename."
+                detail="Invalid PDF filename.",
             )
 
         target = UPLOAD_DIR / safe_name
+
+        # ----------------------------------------------------
+        # Save uploaded PDF
+        # ----------------------------------------------------
 
         try:
             with target.open("wb") as out:
                 shutil.copyfileobj(
                     upload.file,
-                    out
+                    out,
                 )
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Failed to save "
+                    f"{safe_name}: {exc}"
+                ),
+            )
+
         finally:
             await upload.close()
+
+        # ----------------------------------------------------
+        # Extract and persist facts
+        # ----------------------------------------------------
 
         try:
             doc_id, count = ingest_document(target)
@@ -112,15 +154,22 @@ async def upload_documents(
         except Exception as exc:
 
             if target.exists():
-                target.unlink()
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
 
             raise HTTPException(
                 status_code=500,
                 detail=(
                     f"Failed to process "
                     f"{safe_name}: {exc}"
-                )
+                ),
             )
+
+        # ----------------------------------------------------
+        # Read persisted document
+        # ----------------------------------------------------
 
         with get_db() as db:
             row = db.execute(
@@ -132,7 +181,7 @@ async def upload_documents(
                 FROM documents
                 WHERE id = ?
                 """,
-                (doc_id,)
+                (doc_id,),
             ).fetchone()
 
         if row is None:
@@ -141,8 +190,17 @@ async def upload_documents(
                 detail=(
                     "Document was processed but "
                     "could not be read back."
-                )
+                ),
             )
+
+        # ----------------------------------------------------
+        # Duplicate handling
+        # ----------------------------------------------------
+        #
+        # ingest_document() returns count=0 when the exact
+        # same SHA-256 document already exists.
+        #
+        # We still return the existing document normally.
 
         results.append(
             {
@@ -153,19 +211,13 @@ async def upload_documents(
             }
         )
 
-    # IMPORTANT:
-    # Do NOT run analyze_all() here.
-    #
-    # Upload should return after extraction.
-    # Relationship analysis is triggered separately
-    # through /api/analyze.
-
     return {
         "documents": results,
         "analysis_required": True,
         "message": (
             "Documents uploaded and facts extracted. "
-            "Run /api/analyze to build cross-document relationships."
+            "Run /api/analyze to build cross-document "
+            "relationships."
         ),
     }
 
@@ -176,6 +228,19 @@ async def upload_documents(
 
 @app.post("/api/analyze")
 def analyze():
+    """
+    Run cross-document relationship reasoning.
+
+    This is intentionally separate from upload so that:
+        PDF upload -> fast
+        relationship analysis -> explicit operation
+
+    The relationship engine determines:
+        - CORROBORATES
+        - CONTRADICTS
+        - RECONCILES
+        - semantic/topic compatibility
+    """
 
     with get_db() as db:
 
@@ -193,12 +258,34 @@ def analyze():
             """
         ).fetchone()["n"]
 
-    relationships = analyze_all()
+    if documents == 0 or facts < 2:
+        return {
+            "documents_processed": documents,
+            "facts_created": facts,
+            "relationships_created": 0,
+            "message": (
+                "Not enough data for cross-document analysis."
+            ),
+        }
+
+    try:
+        relationships = analyze_all()
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Relationship analysis failed: {exc}"
+            ),
+        )
 
     return {
         "documents_processed": documents,
         "facts_created": facts,
         "relationships_created": relationships,
+        "message": (
+            "Cross-document relationship analysis completed."
+        ),
     }
 
 
@@ -208,6 +295,12 @@ def analyze():
 
 @app.get("/api/documents")
 def documents():
+    """
+    Return all ingested documents.
+
+    page_count is taken directly from the PDF ingestion layer.
+    fact_count is calculated from the facts table.
+    """
 
     with get_db() as db:
 
@@ -247,6 +340,11 @@ def documents():
 
 @app.get("/api/facts")
 def facts():
+    """
+    Return every extracted fact with source document metadata.
+
+    JSON fields are decoded before returning them to the frontend.
+    """
 
     with get_db() as db:
 
@@ -267,16 +365,16 @@ def facts():
 
     for row in rows:
 
-        row["dates"] = json.loads(
-            row.get("dates") or "[]"
+        row["dates"] = _safe_json_list(
+            row.get("dates")
         )
 
-        row["entities"] = json.loads(
-            row.get("entities") or "[]"
+        row["entities"] = _safe_json_list(
+            row.get("entities")
         )
 
-        row["warnings"] = json.loads(
-            row.get("warnings") or "[]"
+        row["warnings"] = _safe_json_list(
+            row.get("warnings")
         )
 
     return rows
@@ -288,6 +386,9 @@ def facts():
 
 @app.get("/api/documents/{document_id}/facts")
 def document_facts(document_id: int):
+    """
+    Return all facts extracted from one document.
+    """
 
     with get_db() as db:
 
@@ -300,13 +401,13 @@ def document_facts(document_id: int):
             FROM documents
             WHERE id = ?
             """,
-            (document_id,)
+            (document_id,),
         ).fetchone()
 
         if document is None:
             raise HTTPException(
                 status_code=404,
-                detail="Document not found."
+                detail="Document not found.",
             )
 
         rows = [
@@ -318,25 +419,76 @@ def document_facts(document_id: int):
                 WHERE document_id = ?
                 ORDER BY page, id
                 """,
-                (document_id,)
+                (document_id,),
             ).fetchall()
         ]
 
     for row in rows:
 
-        row["dates"] = json.loads(
-            row.get("dates") or "[]"
+        row["dates"] = _safe_json_list(
+            row.get("dates")
         )
 
-        row["entities"] = json.loads(
-            row.get("entities") or "[]"
+        row["entities"] = _safe_json_list(
+            row.get("entities")
         )
 
-        row["warnings"] = json.loads(
-            row.get("warnings") or "[]"
+        row["warnings"] = _safe_json_list(
+            row.get("warnings")
         )
 
     return rows
+
+
+# ============================================================
+# SINGLE FACT
+# ============================================================
+
+@app.get("/api/facts/{fact_id}")
+def get_fact(fact_id: int):
+    """
+    Return one fact with its source document.
+
+    Useful for frontend fact inspection and debugging.
+    """
+
+    with get_db() as db:
+
+        row = db.execute(
+            """
+            SELECT
+                f.*,
+                d.filename,
+                d.page_count
+            FROM facts f
+            JOIN documents d
+                ON d.id = f.document_id
+            WHERE f.id = ?
+            """,
+            (fact_id,),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Fact not found.",
+        )
+
+    result = dict(row)
+
+    result["dates"] = _safe_json_list(
+        result.get("dates")
+    )
+
+    result["entities"] = _safe_json_list(
+        result.get("entities")
+    )
+
+    result["warnings"] = _safe_json_list(
+        result.get("warnings")
+    )
+
+    return result
 
 
 # ============================================================
@@ -345,6 +497,21 @@ def document_facts(document_id: int):
 
 @app.get("/api/relationships")
 def relationships():
+    """
+    Return cross-document relationships together with the
+    source evidence needed by the UI.
+
+    Every relationship exposes:
+        - relation type
+        - confidence/score
+        - explanation
+        - reasoning signals
+        - document names
+        - source pages
+        - source evidence
+        - original fact text
+        - subject/predicate/value/unit
+    """
 
     with get_db() as db:
 
@@ -377,7 +544,25 @@ def relationships():
                     fb.value AS value_b,
 
                     fa.unit AS unit_a,
-                    fb.unit AS unit_b
+                    fb.unit AS unit_b,
+
+                    fa.normalized_value AS normalized_value_a,
+                    fb.normalized_value AS normalized_value_b,
+
+                    fa.normalized_unit AS normalized_unit_a,
+                    fb.normalized_unit AS normalized_unit_b,
+
+                    fa.dates AS dates_a,
+                    fb.dates AS dates_b,
+
+                    fa.entities AS entities_a,
+                    fb.entities AS entities_b,
+
+                    fa.confidence AS confidence_a,
+                    fb.confidence AS confidence_b,
+
+                    fa.warnings AS warnings_a,
+                    fb.warnings AS warnings_b
 
                 FROM relationships r
 
@@ -400,13 +585,94 @@ def relationships():
             ).fetchall()
         ]
 
+    # --------------------------------------------------------
+    # Decode JSON fields
+    # --------------------------------------------------------
+
     for row in rows:
 
-        row["signals"] = json.loads(
-            row.get("signals") or "{}"
+        row["signals"] = _safe_json_object(
+            row.get("signals")
+        )
+
+        row["dates_a"] = _safe_json_list(
+            row.get("dates_a")
+        )
+
+        row["dates_b"] = _safe_json_list(
+            row.get("dates_b")
+        )
+
+        row["entities_a"] = _safe_json_list(
+            row.get("entities_a")
+        )
+
+        row["entities_b"] = _safe_json_list(
+            row.get("entities_b")
+        )
+
+        row["warnings_a"] = _safe_json_list(
+            row.get("warnings_a")
+        )
+
+        row["warnings_b"] = _safe_json_list(
+            row.get("warnings_b")
         )
 
     return rows
+
+
+# ============================================================
+# RELATIONSHIP SUMMARY
+# ============================================================
+
+@app.get("/api/relationships/summary")
+def relationship_summary():
+    """
+    Return relationship counts for dashboard/evaluation use.
+
+    Keeping this calculation server-side avoids making the
+    frontend infer relationship state.
+    """
+
+    with get_db() as db:
+
+        total = db.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM relationships
+            """
+        ).fetchone()["n"]
+
+        rows = db.execute(
+            """
+            SELECT
+                relation,
+                COUNT(*) AS count
+            FROM relationships
+            GROUP BY relation
+            ORDER BY count DESC
+            """
+        ).fetchall()
+
+    by_relation = {
+        row["relation"]: row["count"]
+        for row in rows
+    }
+
+    return {
+        "total": total,
+        "by_relation": by_relation,
+        "corroborates": by_relation.get(
+            "CORROBORATES", 0
+        ),
+        "contradicts": by_relation.get(
+            "CONTRADICTS", 0
+        ),
+        "reconciles": by_relation.get(
+            "RECONCILES", 0
+        ),
+    }
 
 
 # ============================================================
@@ -415,6 +681,10 @@ def relationships():
 
 @app.delete("/api/reset")
 def reset():
+    """
+    Delete all derived and source data from the local database
+    and remove uploaded PDFs.
+    """
 
     with get_db() as db:
 
@@ -446,5 +716,65 @@ def reset():
         "message": (
             "All documents, facts and relationships "
             "were deleted."
-        )
+        ),
     }
+
+
+# ============================================================
+# JSON HELPERS
+# ============================================================
+
+def _safe_json_list(value):
+    """
+    Safely decode a JSON array stored in SQLite.
+
+    Bad/missing JSON should never break the entire API response.
+    """
+
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return value
+
+    try:
+        parsed = json.loads(value)
+
+        if isinstance(parsed, list):
+            return parsed
+
+        return []
+
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return []
+
+
+def _safe_json_object(value):
+    """
+    Safely decode a JSON object stored in SQLite.
+    """
+
+    if value is None:
+        return {}
+
+    if isinstance(value, dict):
+        return value
+
+    try:
+        parsed = json.loads(value)
+
+        if isinstance(parsed, dict):
+            return parsed
+
+        return {}
+
+    except (
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return {}
