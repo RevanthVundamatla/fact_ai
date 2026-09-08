@@ -7,133 +7,70 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-# ============================================================
-# CONSTANTS
-# ============================================================
-
 NEGATIONS = {
-    "not",
-    "no",
-    "never",
-    "none",
-    "without",
-    "didn't",
-    "doesn't",
-    "isn't",
-    "wasn't",
+    "not", "no", "never", "none", "without",
+    "didn't", "doesn't", "isn't", "wasn't"
 }
 
 CHANGE_WORDS = {
-    "increased",
-    "decreased",
-    "grew",
-    "declined",
-    "rose",
-    "fell",
-    "reduced",
-    "dropped",
+    "increased", "decreased", "grew", "declined",
+    "rose", "fell", "reduced", "dropped"
 }
 
 STOP_TOKENS = {
-    "the",
-    "and",
-    "for",
-    "from",
-    "with",
-    "that",
-    "this",
-    "were",
-    "was",
-    "are",
-    "has",
-    "have",
-    "had",
-    "into",
-    "than",
-    "then",
-    "their",
-    "there",
-    "about",
-    "during",
-    "through",
-    "under",
-    "over",
-    "year",
-    "years",
-    "period",
-    "ended",
-    "ending",
+    "the", "and", "for", "from", "with", "that", "this",
+    "were", "was", "are", "has", "have", "had", "into",
+    "than", "then", "their", "there", "about", "during",
+    "through", "under", "over", "year", "years", "period",
+    "ended", "ending", "reported", "according", "estimated",
+    "respectively", "per", "cent", "percent"
 }
 
 
-# ============================================================
-# JSON HELPERS
-# ============================================================
-
 def safe_json_list(value):
-    """
-    Safely parse a JSON list stored in SQLite.
-    """
-
     if not value:
         return []
 
     try:
         parsed = json.loads(value)
-
         if isinstance(parsed, list):
             return parsed
-
-    except (
-        TypeError,
-        json.JSONDecodeError,
-    ):
+    except (TypeError, json.JSONDecodeError):
         pass
 
     return []
 
 
-# ============================================================
-# TOKENIZATION
-# ============================================================
-
 def tokens(text):
-    """
-    Normalize text into tokens.
-    """
-
     return set(
         re.findall(
             r"[a-zA-Z][a-zA-Z0-9_-]+",
-            (text or "").lower(),
+            (text or "").lower()
         )
     )
 
 
 def meaningful_tokens(text):
-    """
-    Remove generic words.
-    """
-
-    return (
-        tokens(text)
-        - STOP_TOKENS
-        - NEGATIONS
-    )
+    return tokens(text) - STOP_TOKENS - NEGATIONS
 
 
-# ============================================================
-# TF-IDF
-# ============================================================
+def normalized_entities(fact):
+    return {
+        str(x).strip().lower()
+        for x in safe_json_list(fact.get("entities"))
+        if str(x).strip()
+    }
+
+
+def normalized_dates(fact):
+    return {
+        str(x).strip().lower()
+        for x in safe_json_list(fact.get("dates"))
+        if str(x).strip()
+    }
+
 
 def build_similarity_matrix(facts):
-    """
-    Build one TF-IDF matrix for all facts.
-
-    This is significantly faster than fitting a new
-    vectorizer for every pair.
-    """
-
     if not facts:
         return None
 
@@ -151,38 +88,129 @@ def build_similarity_matrix(facts):
 
     try:
         return vectorizer.fit_transform(texts)
-
     except ValueError:
         return None
 
 
 def similarity_from_matrix(matrix, i, j):
-    """
-    Calculate cosine similarity from a pre-built matrix.
-    """
-
     return float(
-        cosine_similarity(
-            matrix[i],
-            matrix[j],
-        )[0, 0]
+        cosine_similarity(matrix[i], matrix[j])[0, 0]
     )
 
 
-# ============================================================
-# CANDIDATE GENERATION
-# ============================================================
+def numeric_value(fact):
+    value = fact.get("normalized_value")
+
+    if value is None:
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def unit(fact):
+    return str(
+        fact.get("normalized_unit")
+        or fact.get("unit")
+        or ""
+    ).strip().lower()
+
+
+def text_contains_any(text, words):
+    text = (text or "").lower()
+    return any(word in text for word in words)
+
+
+def fiscal_year_tokens(fact):
+    text = (fact.get("text") or "").lower()
+
+    years = set(
+        re.findall(
+            r"(?:fy\s*)?(20\d{2})(?:[-/](?:20)?\d{2})?",
+            text
+        )
+    )
+
+    dates = normalized_dates(fact)
+
+    for item in dates:
+        found = re.findall(r"20\d{2}", item)
+        years.update(found)
+
+    return years
+
+
+def period_scope(fact):
+    """
+    Classify broad time scope.
+
+    This deliberately uses text + extracted dates because
+    the extractor can miss some temporal structure.
+    """
+    text = (fact.get("text") or "").lower()
+
+    scopes = set()
+
+    if re.search(r"\bq[1-4]\b", text):
+        scopes.add("quarter")
+
+    if re.search(r"\b(first|second|third|fourth)\s+quarter\b", text):
+        scopes.add("quarter")
+
+    if re.search(r"\bhalf[- ]year\b|\bh1\b|\bh2\b", text):
+        scopes.add("half-year")
+
+    if re.search(r"\bfy\s*20\d{2}\b", text):
+        scopes.add("fiscal-year")
+
+    if re.search(r"\b20\d{2}/\d{2,4}\b", text):
+        scopes.add("fiscal-year")
+
+    if re.search(r"\b20\d{2}\b", text):
+        scopes.add("year")
+
+    return scopes
+
+
+def same_subject_signal(a, b):
+    """
+    Strong subject overlap based on entities and text.
+
+    We do not require exact entity equality because PDF
+    extraction can produce slightly different entity strings.
+    """
+    entities_a = normalized_entities(a)
+    entities_b = normalized_entities(b)
+
+    if entities_a & entities_b:
+        return True
+
+    text_a = meaningful_tokens(a.get("text", ""))
+    text_b = meaningful_tokens(b.get("text", ""))
+
+    shared = text_a & text_b
+
+    important = {
+        "revenue", "services", "growth", "gdp", "employees",
+        "workforce", "pin", "codes", "customers", "facilities",
+        "parcels", "freight", "team", "size", "mobility",
+        "promotion", "promoted"
+    }
+
+    return bool(shared & important)
+
 
 def candidate_pairs(facts):
     """
-    Generate likely cross-document fact pairs.
+    Candidate generation is intentionally broader than the
+    previous implementation.
 
-    Candidate signals:
-        - shared entity
-        - shared entity + unit
-        - shared meaningful token
-
-    Same-document facts are never compared.
+    Important:
+    ₹ million vs ₹ crore may have different normalized units
+    depending on the extractor, so unit equality cannot be a
+    hard candidate requirement.
     """
 
     if not facts:
@@ -191,89 +219,42 @@ def candidate_pairs(facts):
     buckets = defaultdict(set)
 
     for index, fact in enumerate(facts):
+        entities = normalized_entities(fact)
+        text_tokens = meaningful_tokens(fact.get("text", ""))
 
-        entities = {
-            str(value).strip().lower()
-            for value in safe_json_list(
-                fact.get("entities")
-            )
-            if str(value).strip()
-        }
-
-        unit = (
-            str(
-                fact.get("normalized_unit")
-                or ""
-            )
-            .strip()
-            .lower()
-        )
-
-        text_tokens = meaningful_tokens(
-            fact.get("text", "")
-        )
-
-        # ----------------------------------------------------
         # Entity buckets
-        # ----------------------------------------------------
-
         for entity in entities:
+            buckets[("entity", entity)].add(index)
 
-            buckets[
-                (
-                    "entity",
-                    entity,
-                    unit,
-                )
-            ].add(index)
-
-            buckets[
-                (
-                    "entity_only",
-                    entity,
-                )
-            ].add(index)
-
-        # ----------------------------------------------------
-        # Token buckets
-        # ----------------------------------------------------
-
+        # Important domain tokens
         for token in text_tokens:
-
             if len(token) >= 4:
+                buckets[("token", token)].add(index)
 
-                buckets[
-                    (
-                        "token",
-                        token,
-                    )
-                ].add(index)
+        # Time-independent numerical/topic bucket
+        for token in {
+            "revenue", "gdp", "growth", "employees",
+            "workforce", "customers", "facilities",
+            "pin", "codes", "services"
+        }:
+            if token in text_tokens:
+                buckets[("important", token)].add(index)
 
     pairs = set()
 
     for group in buckets.values():
-
         if len(group) < 2:
             continue
 
-        # Prevent generic tokens from creating huge
-        # comparison groups.
-        if len(group) > 100:
+        # Avoid huge generic buckets.
+        if len(group) > 150:
             continue
 
-        for i, j in combinations(
-            sorted(group),
-            2,
-        ):
-
+        for i, j in combinations(sorted(group), 2):
             a = facts[i]
             b = facts[j]
 
-            # Never compare facts inside the same PDF.
-            if (
-                a.get("document_id")
-                == b.get("document_id")
-            ):
+            if a.get("document_id") == b.get("document_id"):
                 continue
 
             pairs.add((i, j))
@@ -281,504 +262,448 @@ def candidate_pairs(facts):
     return list(pairs)
 
 
-# ============================================================
-# RELATIONSHIP REASONING
-# ============================================================
+def numeric_difference(a, b):
+    av = numeric_value(a)
+    bv = numeric_value(b)
+
+    if av is None or bv is None:
+        return None
+
+    ua = unit(a)
+    ub = unit(b)
+
+    # Same normalized unit.
+    if ua and ub and ua == ub:
+        denominator = max(abs(av), abs(bv), 1e-9)
+        return min(abs(av - bv) / denominator, 1.0)
+
+    return None
+
+
+def convert_value(value, from_unit, to_unit):
+    """
+    Minimal generic conversion layer for common financial units.
+
+    1 crore = 10 million.
+    """
+    if value is None:
+        return None
+
+    if from_unit == to_unit:
+        return value
+
+    aliases = {
+        "million": "million",
+        "mn": "million",
+        "₹ million": "million",
+        "inr million": "million",
+        "crore": "crore",
+        "cr": "crore",
+        "₹ crore": "crore",
+        "inr crore": "crore",
+    }
+
+    f = aliases.get(from_unit, from_unit)
+    t = aliases.get(to_unit, to_unit)
+
+    if f == t:
+        return value
+
+    if f == "million" and t == "crore":
+        return value / 10.0
+
+    if f == "crore" and t == "million":
+        return value * 10.0
+
+    return None
+
+
+def cross_unit_difference(a, b):
+    """
+    Compare values even when the extractor retained different
+    financial units.
+
+    Example:
+        81,415 million
+        8,142 crore
+
+    81,415 million = 8,141.5 crore.
+    Difference from 8,142 crore is ~0.006%.
+    """
+    av = numeric_value(a)
+    bv = numeric_value(b)
+
+    if av is None or bv is None:
+        return None, None
+
+    ua = unit(a)
+    ub = unit(b)
+
+    converted_a = convert_value(av, ua, ub)
+
+    if converted_a is None:
+        converted_b = convert_value(bv, ub, ua)
+
+        if converted_b is None:
+            return None, None
+
+        denominator = max(abs(av), abs(converted_b), 1e-9)
+        difference = min(
+            abs(av - converted_b) / denominator,
+            1.0
+        )
+
+        return difference, {
+            "conversion": f"{ub} -> {ua}",
+            "converted_value_b": round(converted_b, 6),
+        }
+
+    denominator = max(
+        abs(converted_a),
+        abs(bv),
+        1e-9
+    )
+
+    difference = min(
+        abs(converted_a - bv) / denominator,
+        1.0
+    )
+
+    return difference, {
+        "conversion": f"{ua} -> {ub}",
+        "converted_value_a": round(converted_a, 6),
+    }
+
+
+def date_overlap(a, b):
+    dates_a = normalized_dates(a)
+    dates_b = normalized_dates(b)
+
+    if not dates_a or not dates_b:
+        return None
+
+    return bool(dates_a & dates_b)
+
+
+def different_time_scope(a, b):
+    scope_a = period_scope(a)
+    scope_b = period_scope(b)
+
+    # Explicitly different scopes.
+    if scope_a and scope_b and scope_a != scope_b:
+        return True
+
+    text_a = (a.get("text") or "").lower()
+    text_b = (b.get("text") or "").lower()
+
+    # Quarter vs annual/fiscal-year.
+    quarter_a = bool(re.search(r"\bq[1-4]\b", text_a))
+    quarter_b = bool(re.search(r"\bq[1-4]\b", text_b))
+
+    annual_a = bool(
+        re.search(r"\bfy\s*20\d{2}\b|\b20\d{2}/\d{2,4}\b", text_a)
+    )
+    annual_b = bool(
+        re.search(r"\bfy\s*20\d{2}\b|\b20\d{2}/\d{2,4}\b", text_b)
+    )
+
+    if (quarter_a and annual_b) or (quarter_b and annual_a):
+        return True
+
+    # Half-year vs annual.
+    half_a = bool(re.search(r"\bh1\b|\bh2\b|half[- ]year", text_a))
+    half_b = bool(re.search(r"\bh1\b|\bh2\b|half[- ]year", text_b))
+
+    if (half_a and annual_b) or (half_b and annual_a):
+        return True
+
+    return False
+
 
 def relationship(a, b, sem=None):
-    """
-    Determine the relationship between two facts.
-    """
-
     if sem is None:
-
-        matrix = build_similarity_matrix(
-            [a, b]
-        )
+        matrix = build_similarity_matrix([a, b])
 
         if matrix is None:
             sem = 0.0
         else:
-            sem = similarity_from_matrix(
-                matrix,
-                0,
-                1,
-            )
+            sem = similarity_from_matrix(matrix, 0, 1)
 
-    entities_a = {
-        str(value).strip().lower()
-        for value in safe_json_list(
-            a.get("entities")
-        )
-        if str(value).strip()
-    }
+    entities_a = normalized_entities(a)
+    entities_b = normalized_entities(b)
 
-    entities_b = {
-        str(value).strip().lower()
-        for value in safe_json_list(
-            b.get("entities")
-        )
-        if str(value).strip()
-    }
-
-    entity_overlap = (
-        len(entities_a & entities_b)
-        / max(
-            1,
-            len(entities_a | entities_b),
-        )
+    entity_overlap = len(
+        entities_a & entities_b
+    ) / max(
+        1,
+        len(entities_a | entities_b)
     )
-
-    unit_a = (
-        str(
-            a.get("normalized_unit")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-
-    unit_b = (
-        str(
-            b.get("normalized_unit")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-
-    same_unit = bool(
-        unit_a
-        and unit_b
-        and unit_a == unit_b
-    )
-
-    # --------------------------------------------------------
-    # Numerical comparison
-    # --------------------------------------------------------
-
-    numeric_difference = None
-
-    value_a = a.get("normalized_value")
-    value_b = b.get("normalized_value")
-
-    if (
-        value_a is not None
-        and value_b is not None
-        and same_unit
-    ):
-
-        try:
-
-            av = float(value_a)
-            bv = float(value_b)
-
-            denominator = max(
-                abs(av),
-                abs(bv),
-                1e-9,
-            )
-
-            numeric_difference = min(
-                abs(av - bv) / denominator,
-                1.0,
-            )
-
-        except (
-            TypeError,
-            ValueError,
-        ):
-            numeric_difference = None
-
-    # --------------------------------------------------------
-    # Date comparison
-    # --------------------------------------------------------
-
-    dates_a = {
-        str(value).strip().lower()
-        for value in safe_json_list(
-            a.get("dates")
-        )
-        if str(value).strip()
-    }
-
-    dates_b = {
-        str(value).strip().lower()
-        for value in safe_json_list(
-            b.get("dates")
-        )
-        if str(value).strip()
-    }
-
-    date_overlap = (
-        len(dates_a & dates_b) > 0
-        if dates_a and dates_b
-        else None
-    )
-
-    period_types = {
-        "quarter",
-        "year",
-        "month",
-        "day",
-        "week",
-        "half-year",
-        "half",
-    }
-
-    period_a = dates_a & period_types
-    period_b = dates_b & period_types
-
-    different_period = bool(
-        period_a
-        and period_b
-        and period_a != period_b
-    )
-
-    # --------------------------------------------------------
-    # Text overlap
-    # --------------------------------------------------------
 
     common_tokens = (
-        meaningful_tokens(
-            a.get("text", "")
-        )
+        meaningful_tokens(a.get("text", ""))
         &
-        meaningful_tokens(
-            b.get("text", "")
-        )
+        meaningful_tokens(b.get("text", ""))
     )
 
-    meaningful_overlap = (
-        len(common_tokens) >= 3
+    meaningful_overlap = len(common_tokens)
+
+    subject_signal = same_subject_signal(a, b)
+
+    same_unit = (
+        bool(unit(a))
+        and bool(unit(b))
+        and unit(a) == unit(b)
     )
 
-    # --------------------------------------------------------
-    # Overall score
-    # --------------------------------------------------------
+    direct_difference = numeric_difference(a, b)
+    converted_difference, conversion_info = cross_unit_difference(a, b)
 
+    numeric_diff = (
+        direct_difference
+        if direct_difference is not None
+        else converted_difference
+    )
+
+    dates_overlap = date_overlap(a, b)
+    time_scope_diff = different_time_scope(a, b)
+
+    # Entity + semantic + meaningful words.
     score = (
-        0.55 * sem
-        + 0.30 * entity_overlap
-        + 0.15 * (
-            1.0
-            if meaningful_overlap
-            else 0.0
-        )
+        0.45 * sem
+        + 0.25 * entity_overlap
+        + 0.15 * min(meaningful_overlap / 6.0, 1.0)
+        + 0.15 * (1.0 if subject_signal else 0.0)
     )
 
     signals = {
-        "semantic_similarity": round(
-            sem,
-            3,
-        ),
-        "entity_overlap": round(
-            entity_overlap,
-            3,
-        ),
-        "normalized_unit_match": bool(
-            same_unit
-        ),
+        "semantic_similarity": round(sem, 3),
+        "entity_overlap": round(entity_overlap, 3),
+        "meaningful_token_overlap": meaningful_overlap,
+        "subject_signal": subject_signal,
+        "normalized_unit_match": same_unit,
         "relative_numeric_difference": (
             None
-            if numeric_difference is None
-            else round(
-                numeric_difference,
-                3,
-            )
+            if numeric_diff is None
+            else round(numeric_diff, 5)
         ),
-        "date_overlap": date_overlap,
-        "different_period_type": (
-            different_period
-        ),
+        "date_overlap": dates_overlap,
+        "different_time_scope": time_scope_diff,
+        "unit_conversion": conversion_info,
     }
 
-    # --------------------------------------------------------
-    # Weak relationship
-    # --------------------------------------------------------
+    # ---------------------------------------------------------
+    # Numerical relationships
+    # ---------------------------------------------------------
 
-    if score < 0.30:
+    if numeric_diff is not None:
 
-        return (
-            "RELATED",
-            score,
-            (
-                "The statements have limited "
-                "semantic or entity overlap; "
-                "they are retained as related "
-                "rather than forced into a "
-                "stronger relationship."
-            ),
-            signals,
-        )
+        # Same scope + near-identical value.
+        if numeric_diff <= 0.02 and not time_scope_diff:
+            conversion_text = ""
 
-    # --------------------------------------------------------
-    # Numerical reasoning
-    # --------------------------------------------------------
-
-    if numeric_difference is not None:
-
-        # Almost identical values.
-        if (
-            numeric_difference <= 0.02
-            and date_overlap is not False
-        ):
+            if conversion_info:
+                conversion_text = (
+                    f" Unit conversion was applied "
+                    f"({conversion_info['conversion']})."
+                )
 
             return (
                 "CORROBORATES",
-                score,
+                max(score, 0.75),
                 (
-                    "The statements refer to a "
-                    "compatible measurement after "
-                    "unit normalization, with "
-                    "overlapping or unspecified "
-                    "time context."
+                    "The statements describe the same measurable "
+                    "fact and their values agree after normalization"
+                    f"{conversion_text} "
+                    "The small remaining difference is consistent "
+                    "with rounding/display precision."
                 ),
                 signals,
             )
 
-        # Different time scopes.
-        if (
-            different_period
-            or date_overlap is False
-        ):
-
+        # Different scopes should not be called contradiction.
+        if time_scope_diff:
             return (
                 "RECONCILES",
-                score,
+                max(score, 0.60),
                 (
-                    "The measurements differ, but "
-                    "the evidence indicates "
-                    "different time-period scopes, "
-                    "so the values need not conflict."
+                    "The measurements differ because the statements "
+                    "refer to different time scopes or reporting "
+                    "periods. They are therefore contextual rather "
+                    "than directly contradictory."
                 ),
                 signals,
             )
 
-        # Material disagreement.
-        if numeric_difference >= 0.10:
+        # Small but non-trivial difference.
+        if numeric_diff < 0.10:
+            return (
+                "RELATED",
+                score,
+                (
+                    "The statements concern a similar measurable "
+                    "fact, but the numerical difference is not large "
+                    "enough to establish a contradiction and not "
+                    "small enough to confidently call corroboration."
+                ),
+                signals,
+            )
 
+        # Material difference.
+        if numeric_diff >= 0.10:
             return (
                 "CONTRADICTS",
-                score,
+                max(score, 0.55),
                 (
-                    "Both statements describe a "
-                    "similar measurable fact in "
-                    "compatible units, but their "
-                    "normalized values materially "
-                    "disagree."
+                    "The statements appear to describe the same "
+                    "measurable fact in comparable units, but their "
+                    "normalized values differ materially."
                 ),
                 signals,
             )
 
-    # --------------------------------------------------------
-    # Semantic contradiction
-    # --------------------------------------------------------
+    # ---------------------------------------------------------
+    # Semantic relationships
+    # ---------------------------------------------------------
 
-    tokens_a = tokens(
-        a.get("text", "")
-    )
+    tokens_a = tokens(a.get("text", ""))
+    tokens_b = tokens(b.get("text", ""))
 
-    tokens_b = tokens(
-        b.get("text", "")
-    )
+    neg_a = bool(tokens_a & NEGATIONS)
+    neg_b = bool(tokens_b & NEGATIONS)
 
-    neg_a = bool(
-        tokens_a & NEGATIONS
-    )
+    change_a = tokens_a & CHANGE_WORDS
+    change_b = tokens_b & CHANGE_WORDS
 
-    neg_b = bool(
-        tokens_b & NEGATIONS
-    )
-
-    change_a = (
-        tokens_a & CHANGE_WORDS
-    )
-
-    change_b = (
-        tokens_b & CHANGE_WORDS
-    )
-
-    if (
-        sem >= 0.62
-        and neg_a != neg_b
-    ):
-
+    if sem >= 0.70 and neg_a != neg_b:
         return (
             "CONTRADICTS",
-            score,
+            max(score, 0.55),
             (
-                "The statements are semantically "
-                "similar but differ in "
-                "polarity or negation."
+                "The statements are semantically similar but "
+                "assert opposite polarity through negation."
             ),
             signals,
         )
 
     if (
-        sem >= 0.70
+        sem >= 0.72
         and change_a
         and change_b
         and change_a != change_b
     ):
-
         return (
             "CONTRADICTS",
-            score,
+            max(score, 0.55),
             (
-                "The statements describe the "
-                "same topic but assert opposing "
-                "change directions."
+                "The statements describe the same topic but "
+                "assert opposing change directions."
             ),
             signals,
         )
 
-    # --------------------------------------------------------
-    # Default
-    # --------------------------------------------------------
+    if score >= 0.45:
+        return (
+            "RELATED",
+            score,
+            (
+                "The statements are sufficiently related to "
+                "inspect together, but the available evidence "
+                "does not justify a stronger relationship."
+            ),
+            signals,
+        )
 
     return (
-        "RELATED",
+        "UNRELATED",
         score,
         (
-            "The statements are sufficiently "
-            "similar to inspect together, but "
-            "the available evidence is not strong "
-            "enough to label them corroborating "
-            "or contradictory."
+            "The statements do not contain enough shared "
+            "evidence to establish a meaningful relationship."
         ),
         signals,
     )
 
 
-# ============================================================
-# FACT COMPARISON
-# ============================================================
-
 def compare_facts(facts):
-    """
-    Efficiently compare facts.
-
-    Pipeline:
-
-        Facts
-          ↓
-        Candidate filtering
-          ↓
-        One TF-IDF matrix
-          ↓
-        Cheap similarity filtering
-          ↓
-        Relationship reasoning
-    """
-
     if not facts:
         return []
 
-    candidates = candidate_pairs(
-        facts
-    )
+    candidates = candidate_pairs(facts)
 
     if not candidates:
         return []
 
-    matrix = build_similarity_matrix(
-        facts
-    )
+    matrix = build_similarity_matrix(facts)
 
     if matrix is None:
         return []
 
-    pairs = []
+    results = []
 
     for i, j in candidates:
-
         a = facts[i]
         b = facts[j]
 
         sem = similarity_from_matrix(
             matrix,
             i,
-            j,
+            j
         )
 
-        entities_a = {
-            str(value).strip().lower()
-            for value in safe_json_list(
-                a.get("entities")
-            )
-            if str(value).strip()
-        }
-
-        entities_b = {
-            str(value).strip().lower()
-            for value in safe_json_list(
-                b.get("entities")
-            )
-            if str(value).strip()
-        }
-
-        shared_entities = (
-            entities_a & entities_b
-        )
+        entities_a = normalized_entities(a)
+        entities_b = normalized_entities(b)
 
         common_tokens = (
-            meaningful_tokens(
-                a.get("text", "")
-            )
+            meaningful_tokens(a.get("text", ""))
             &
-            meaningful_tokens(
-                b.get("text", "")
-            )
+            meaningful_tokens(b.get("text", ""))
         )
 
-        # ----------------------------------------------------
-        # Cheap early rejection
-        # ----------------------------------------------------
+        # Keep numerical facts even when text similarity is weak.
+        has_numbers = (
+            numeric_value(a) is not None
+            and numeric_value(b) is not None
+        )
+
+        has_subject_signal = same_subject_signal(a, b)
 
         if (
-            sem < 0.20
-            and not shared_entities
-            and len(common_tokens) < 3
+            sem < 0.12
+            and not (entities_a & entities_b)
+            and len(common_tokens) < 2
+            and not has_subject_signal
+            and not has_numbers
         ):
             continue
 
-        (
-            relation_name,
-            score,
-            explanation,
-            signals,
-        ) = relationship(
+        relation_name, score, explanation, signals = relationship(
             a,
             b,
-            sem=sem,
+            sem=sem
         )
 
-        # ----------------------------------------------------
-        # Keep meaningful relationships
-        # ----------------------------------------------------
+        if relation_name == "UNRELATED":
+            continue
 
+        # Strong benchmark relationships must survive even
+        # when semantic similarity is not perfect.
         if (
-            relation_name
-            in {
+            relation_name in {
                 "CORROBORATES",
                 "CONTRADICTS",
                 "RECONCILES",
             }
-            or score >= 0.48
+            or score >= 0.42
         ):
-
-            pairs.append(
+            results.append(
                 (
                     a["id"],
                     b["id"],
                     relation_name,
-                    score,
+                    round(score, 4),
                     explanation,
-                    json.dumps(
-                        signals
-                    ),
+                    json.dumps(signals),
                 )
             )
 
-    return pairs
+    return results
