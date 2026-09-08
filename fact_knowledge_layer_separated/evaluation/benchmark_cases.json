@@ -1,0 +1,68 @@
+{
+  "dataset": "Starter Datasets supplied for the assignment",
+  "cases": [
+    {
+      "id": "case-1-corroboration-delhivery-fy24-revenue",
+      "type": "CORROBORATES",
+      "documents": [
+        {
+          "file": "delhivery/02-delhivery-annual-report-fy24-excerpt.pdf",
+          "page": 6,
+          "evidence": "Revenue from services (\u20b9 million): FY24 81,415; FY23 72,236."
+        },
+        {
+          "file": "delhivery/03-delhivery-q4-fy24-earnings-presentation.pdf",
+          "page": 6,
+          "evidence": "\u20b98,142 Cr FY24 revenue from services; FY24 service revenue growth 12.7%."
+        }
+      ],
+      "reasoning": "81,415 million INR = 8,141.5 crore, which rounds to the presentation's \u20b98,142 crore. Same FY24 scope, different units/rounding."
+    },
+    {
+      "id": "case-2-likely-contradiction-india-fy25-gdp-vintage",
+      "type": "CONTRADICTS",
+      "documents": [
+        {
+          "file": "india-macroeconomy/01-india-economic-survey-2024-25-excerpt.pdf",
+          "page": 14,
+          "evidence": "Real gross domestic product (GDP) growth for FY25 is estimated to be 6.4 per cent."
+        },
+        {
+          "file": "india-macroeconomy/03-imf-india-2025-article-iv-excerpt.pdf",
+          "page": 3,
+          "evidence": "Following economic growth of 6.5 percent in FY2024/25..."
+        }
+      ],
+      "reasoning": "Both describe FY2024/25 real GDP growth, but report 6.4% versus 6.5%. This is a likely contradiction at the displayed precision; because the reports use different data vintages and publication dates, the system should label it likely rather than definitive."
+    },
+    {
+      "id": "case-3-context-india-q1-vs-fy25-gdp",
+      "type": "RECONCILES",
+      "documents": [
+        {
+          "file": "india-macroeconomy/01-india-economic-survey-2024-25-excerpt.pdf",
+          "page": 20,
+          "evidence": "GDP at constant (2011-12) prices grew by 6.7 per cent and 5.4 per cent in Q1 and Q2 FY25, respectively. This implied a real GDP growth of 6.0 per cent in the first half."
+        },
+        {
+          "file": "india-macroeconomy/01-india-economic-survey-2024-25-excerpt.pdf",
+          "page": 14,
+          "evidence": "Real GDP growth for FY25 is estimated to be 6.4 per cent."
+        }
+      ],
+      "reasoning": "The numbers cover different time scopes: Q1/Q2/H1 versus the whole fiscal year. They are not contradictory."
+    },
+    {
+      "id": "case-4-failure-semantic-reference",
+      "type": "FAILURE",
+      "documents": [
+        {
+          "file": "delhivery/02-delhivery-annual-report-fy24-excerpt.pdf",
+          "page": 17,
+          "evidence": "In FY24, 1,509 employees took advantage of internal mobility and moved to new roles. We promoted 423 employees throughout the year..."
+        }
+      ],
+      "reasoning": "A robust extractor must distinguish multiple nearby facts in one sentence/paragraph and avoid attaching 1,509 to the promotion predicate. This is a useful precision failure to test with evidence spans."
+    }
+  ]
+}

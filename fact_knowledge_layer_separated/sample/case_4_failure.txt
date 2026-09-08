@@ -1,0 +1,2 @@
+Acme said it increased significantly after the expansion.
+The statement does not specify the baseline, amount, unit, or exact period, so a robust system should flag this as an incomplete semantic fact rather than inventing a number.

@@ -1,0 +1,14 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    env_file: backend/.env
+    ports: ["8000:8000"]
+    volumes: ["./data:/app/data"]
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports: ["5173:80"]
+    depends_on: [backend]
