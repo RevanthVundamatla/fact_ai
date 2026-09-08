@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+
 import {
   Upload,
   FileText,
@@ -17,37 +18,92 @@ import {
 
 import './styles.css';
 
+
+/* =========================================================
+   API
+========================================================= */
+
 const API = import.meta.env.VITE_API_URL || '';
 
-const api = async (path, opt = {}) => {
-  const r = await fetch(API + path, opt);
 
-  if (!r.ok) {
-    throw new Error((await r.text()) || r.statusText);
+async function api(path, options = {}) {
+
+  const response = await fetch(
+    API + path,
+    options
+  );
+
+  if (!response.ok) {
+
+    let message = response.statusText;
+
+    try {
+      const body = await response.json();
+
+      message =
+        body.detail ||
+        body.message ||
+        JSON.stringify(body);
+    } catch {
+      try {
+        message = await response.text();
+      } catch {
+        // Keep statusText.
+      }
+    }
+
+    throw new Error(
+      message || 'Request failed'
+    );
   }
 
-  return r.json();
-};
+  return response.json();
+}
 
-function Badge({ children, type = '' }) {
+
+/* =========================================================
+   BADGE
+========================================================= */
+
+function Badge({
+  children,
+  type = ''
+}) {
+
   return (
-    <span className={'badge ' + type.toLowerCase()}>
+    <span
+      className={
+        'badge ' +
+        String(type).toLowerCase()
+      }
+    >
       {children}
     </span>
   );
 }
 
+
+/* =========================================================
+   APP
+========================================================= */
+
 function App() {
+
   const [docs, setDocs] = useState([]);
   const [facts, setFacts] = useState([]);
   const [rels, setRels] = useState([]);
 
   const [tab, setTab] = useState('Overview');
+
   const [q, setQ] = useState('');
+
   const [busy, setBusy] = useState(false);
+
   const [selected, setSelected] = useState(null);
 
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] =
+    useState(false);
+
 
   const nav = [
     'Overview',
@@ -57,140 +113,358 @@ function App() {
     'Evaluation'
   ];
 
+
+  /* =======================================================
+     LOAD DATA
+  ======================================================= */
+
   const load = async () => {
-    const [d, f, r] = await Promise.all([
+
+    const [
+      documents,
+      allFacts,
+      relationships
+    ] = await Promise.all([
+
       api('/api/documents'),
+
       api('/api/facts'),
+
       api('/api/relationships')
+
     ]);
 
-    setDocs(d);
-    setFacts(f);
-    setRels(r);
+    setDocs(
+      Array.isArray(documents)
+        ? documents
+        : []
+    );
+
+    setFacts(
+      Array.isArray(allFacts)
+        ? allFacts
+        : []
+    );
+
+    setRels(
+      Array.isArray(relationships)
+        ? relationships
+        : []
+    );
   };
+
 
   useEffect(() => {
-    load().catch(console.error);
+
+    load().catch((error) => {
+      console.error(
+        'Initial load failed:',
+        error
+      );
+    });
+
   }, []);
 
+
+  /* =======================================================
+     TAB
+  ======================================================= */
+
   const changeTab = (name) => {
+
     setTab(name);
+
     setMobileMenuOpen(false);
+
   };
 
-  const upload = async (e) => {
-    if (!e.target.files?.length) return;
+
+  /* =======================================================
+     UPLOAD
+  ======================================================= */
+
+  const upload = async (event) => {
+
+    const selectedFiles =
+      event.target.files;
+
+    if (
+      !selectedFiles ||
+      selectedFiles.length === 0
+    ) {
+      return;
+    }
+
 
     setBusy(true);
 
-    const fd = new FormData();
 
-    [...e.target.files].forEach((file) => {
-      fd.append('files', file);
-    });
+    const formData =
+      new FormData();
+
+
+    [...selectedFiles].forEach(
+      (file) => {
+
+        formData.append(
+          'files',
+          file
+        );
+
+      }
+    );
+
 
     try {
-      await api('/api/documents', {
-        method: 'POST',
-        body: fd
-      });
+
+      await api(
+        '/api/documents',
+        {
+          method: 'POST',
+          body: formData
+        }
+      );
+
 
       await load();
+
 
       setTab('Documents');
+
       setMobileMenuOpen(false);
+
     } catch (error) {
-      alert(error.message);
+
+      console.error(error);
+
+      alert(
+        error.message ||
+        'Failed to upload PDF.'
+      );
+
     } finally {
+
       setBusy(false);
 
-      // Allow selecting the same file again later.
-      e.target.value = '';
+      // Allow same file to be selected again.
+      event.target.value = '';
+
     }
   };
+
+
+  /* =======================================================
+     RESET
+  ======================================================= */
 
   const reset = async () => {
-    if (
-      confirm(
-        'Delete all local documents, facts and relationships?'
-      )
-    ) {
-      try {
-        await api('/api/reset', {
-          method: 'DELETE'
-        });
 
-        await load();
-        setSelected(null);
-        setMobileMenuOpen(false);
-      } catch (error) {
-        alert(error.message);
-      }
+    const confirmed =
+      window.confirm(
+        'Delete all local documents, facts and relationships?'
+      );
+
+
+    if (!confirmed) {
+      return;
+    }
+
+
+    try {
+
+      await api(
+        '/api/reset',
+        {
+          method: 'DELETE'
+        }
+      );
+
+
+      await load();
+
+
+      setSelected(null);
+
+      setMobileMenuOpen(false);
+
+    } catch (error) {
+
+      console.error(error);
+
+      alert(
+        error.message ||
+        'Failed to reset data.'
+      );
+
     }
   };
+
+
+  /* =======================================================
+     REFRESH
+  ======================================================= */
 
   const refresh = async () => {
-    try {
-      await load();
-    } catch (error) {
-      console.error(error);
-    }
 
-    setMobileMenuOpen(false);
+    try {
+
+      await load();
+
+    } catch (error) {
+
+      console.error(
+        'Refresh failed:',
+        error
+      );
+
+      alert(
+        error.message ||
+        'Failed to refresh data.'
+      );
+
+    } finally {
+
+      setMobileMenuOpen(false);
+
+    }
   };
 
-  const filteredFacts = facts.filter((x) =>
-    (
-      (x.text || '') +
-      (x.filename || '') +
-      (x.evidence || '') +
-      (x.subject || '') +
-      (x.predicate || '') +
-      (x.value ?? '') +
-      (x.unit || '')
-    )
-      .toLowerCase()
-      .includes(q.toLowerCase())
-  );
+
+  /* =======================================================
+     FACT FILTER
+  ======================================================= */
+
+  const filteredFacts = useMemo(() => {
+
+    const search =
+      q.trim().toLowerCase();
+
+
+    if (!search) {
+      return facts;
+    }
+
+
+    return facts.filter(
+      (fact) => {
+
+        const searchable = [
+
+          fact.text,
+
+          fact.filename,
+
+          fact.evidence,
+
+          fact.subject,
+
+          fact.predicate,
+
+          fact.value,
+
+          fact.unit,
+
+          fact.normalized_value,
+
+          fact.normalized_unit,
+
+          ...(Array.isArray(fact.entities)
+            ? fact.entities
+            : []),
+
+          ...(Array.isArray(fact.dates)
+            ? fact.dates
+            : [])
+
+        ]
+          .filter(
+            (value) =>
+              value !== null &&
+              value !== undefined
+          )
+          .join(' ')
+          .toLowerCase();
+
+
+        return searchable.includes(
+          search
+        );
+      }
+    );
+
+  }, [facts, q]);
+
 
   return (
+
     <div className="app">
 
-      {/* =====================================================
+
+      {/* ===================================================
           DESKTOP SIDEBAR
-      ====================================================== */}
+      =================================================== */}
 
       <aside>
+
         <div className="brand">
-          <div className="logo">FK</div>
+
+          <div className="logo">
+            FK
+          </div>
 
           <div>
-            <b>Fact Knowledge</b>
-            <small>Layer</small>
+            <b>
+              Fact Knowledge
+            </b>
+
+            <small>
+              Layer
+            </small>
           </div>
+
         </div>
 
-        {nav.map((n) => (
+
+        {nav.map((name) => (
+
           <button
-            className={tab === n ? 'nav active' : 'nav'}
-            onClick={() => changeTab(n)}
-            key={n}
+            className={
+              tab === name
+                ? 'nav active'
+                : 'nav'
+            }
+            onClick={() =>
+              changeTab(name)
+            }
+            key={name}
           >
-            {n === 'Overview' ? (
+
+            {name === 'Overview' && (
               <Database />
-            ) : n === 'Documents' ? (
+            )}
+
+            {name === 'Documents' && (
               <FileText />
-            ) : n === 'Facts' ? (
+            )}
+
+            {name === 'Facts' && (
               <Search />
-            ) : n === 'Relationships' ? (
+            )}
+
+            {name === 'Relationships' && (
               <Network />
-            ) : (
+            )}
+
+            {name === 'Evaluation' && (
               <CheckCircle2 />
             )}
 
-            {n}
+            {name}
+
           </button>
+
         ))}
+
 
         <div className="sideBottom">
 
@@ -202,6 +476,7 @@ function App() {
             Refresh
           </button>
 
+
           <button
             className="nav danger"
             onClick={reset}
@@ -211,24 +486,29 @@ function App() {
           </button>
 
         </div>
+
       </aside>
 
 
-      {/* =====================================================
+      {/* ===================================================
           MOBILE OVERLAY
-      ====================================================== */}
+      =================================================== */}
 
       {mobileMenuOpen && (
+
         <div
           className="mobile-overlay"
-          onClick={() => setMobileMenuOpen(false)}
+          onClick={() =>
+            setMobileMenuOpen(false)
+          }
         />
+
       )}
 
 
-      {/* =====================================================
+      {/* ===================================================
           MOBILE DRAWER
-      ====================================================== */}
+      =================================================== */}
 
       <div
         className={
@@ -241,17 +521,29 @@ function App() {
         <div className="mobile-drawer-header">
 
           <div className="brand">
-            <div className="logo">FK</div>
+
+            <div className="logo">
+              FK
+            </div>
 
             <div>
-              <b>Fact Knowledge</b>
-              <small>Layer</small>
+              <b>
+                Fact Knowledge
+              </b>
+
+              <small>
+                Layer
+              </small>
             </div>
+
           </div>
+
 
           <button
             className="mobile-close"
-            onClick={() => setMobileMenuOpen(false)}
+            onClick={() =>
+              setMobileMenuOpen(false)
+            }
             aria-label="Close menu"
           >
             <X size={22} />
@@ -259,31 +551,51 @@ function App() {
 
         </div>
 
+
         <div className="mobile-nav">
 
-          {nav.map((n) => (
+          {nav.map((name) => (
+
             <button
-              className={tab === n ? 'nav active' : 'nav'}
-              onClick={() => changeTab(n)}
-              key={n}
+              className={
+                tab === name
+                  ? 'nav active'
+                  : 'nav'
+              }
+              onClick={() =>
+                changeTab(name)
+              }
+              key={name}
             >
-              {n === 'Overview' ? (
+
+              {name === 'Overview' && (
                 <Database />
-              ) : n === 'Documents' ? (
+              )}
+
+              {name === 'Documents' && (
                 <FileText />
-              ) : n === 'Facts' ? (
+              )}
+
+              {name === 'Facts' && (
                 <Search />
-              ) : n === 'Relationships' ? (
+              )}
+
+              {name === 'Relationships' && (
                 <Network />
-              ) : (
+              )}
+
+              {name === 'Evaluation' && (
                 <CheckCircle2 />
               )}
 
-              {n}
+              {name}
+
             </button>
+
           ))}
 
         </div>
+
 
         <div className="sideBottom">
 
@@ -294,6 +606,7 @@ function App() {
             <RefreshCw />
             Refresh
           </button>
+
 
           <button
             className="nav danger"
@@ -308,50 +621,67 @@ function App() {
       </div>
 
 
-      {/* =====================================================
-          MAIN CONTENT
-      ====================================================== */}
+      {/* ===================================================
+          MAIN
+      =================================================== */}
 
       <main>
 
-        {/* Mobile menu button */}
+
+        {/* Mobile menu */}
 
         <button
           className="mobile-menu-button"
-          onClick={() => setMobileMenuOpen(true)}
+          onClick={() =>
+            setMobileMenuOpen(true)
+          }
           aria-label="Open menu"
         >
+
           <Menu size={21} />
-          <span>Menu</span>
+
+          <span>
+            Menu
+          </span>
+
         </button>
 
 
         {/* =================================================
             HEADER
-        ================================================== */}
+        ================================================= */}
 
         <header>
 
           <div>
-            <h1>{tab}</h1>
+
+            <h1>
+              {tab}
+            </h1>
 
             <p>
               PDF-grounded fact extraction,
               evidence and cross-document reasoning.
             </p>
+
           </div>
+
 
           <label className="upload">
 
             <Upload />
 
-            {busy ? 'Processing…' : 'Upload PDFs'}
+            {busy
+              ? 'Processing…'
+              : 'Upload PDFs'}
+
 
             <input
               type="file"
               accept=".pdf"
               multiple
               onChange={upload}
+              disabled={busy}
             />
 
           </label>
@@ -361,10 +691,12 @@ function App() {
 
         {/* =================================================
             OVERVIEW
-        ================================================== */}
+        ================================================= */}
 
         {tab === 'Overview' && (
+
           <>
+
             <div className="cards">
 
               <Card
@@ -393,6 +725,7 @@ function App() {
 
             </div>
 
+
             <div className="grid">
 
               <section className="panel">
@@ -401,7 +734,9 @@ function App() {
                   Recent documents
                 </h2>
 
-                <DocTable docs={docs} />
+                <DocTable
+                  docs={docs}
+                />
 
               </section>
 
@@ -412,52 +747,72 @@ function App() {
                   Relationship summary
                 </h2>
 
+
                 {rels.length === 0 ? (
+
                   <div className="empty">
+
                     No relationships found yet.
+
+                    <br />
+
                     Upload multiple related PDFs
-                    to build cross-document relationships.
+                    to build cross-document
+                    relationships.
+
                   </div>
+
                 ) : (
+
                   rels
                     .slice(0, 5)
-                    .map((r) => (
+                    .map((relationship) => (
+
                       <Rel
-                        key={r.id}
-                        r={r}
+                        key={relationship.id}
+                        r={relationship}
                       />
+
                     ))
+
                 )}
 
               </section>
 
             </div>
+
           </>
+
         )}
 
 
         {/* =================================================
             DOCUMENTS
-        ================================================== */}
+        ================================================= */}
 
         {tab === 'Documents' && (
+
           <section className="panel">
 
             <h2>
               Documents
             </h2>
 
-            <DocTable docs={docs} />
+            <DocTable
+              docs={docs}
+            />
 
           </section>
+
         )}
 
 
         {/* =================================================
             FACTS
-        ================================================== */}
+        ================================================= */}
 
         {tab === 'Facts' && (
+
           <section className="panel">
 
             <div className="toolbar">
@@ -466,142 +821,214 @@ function App() {
                 Facts
               </h2>
 
+
               <input
                 placeholder="Search facts…"
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(event) =>
+                  setQ(event.target.value)
+                }
               />
 
             </div>
 
+
             {filteredFacts.length === 0 ? (
+
               <div className="empty">
+
                 No facts found.
+
               </div>
+
             ) : (
+
               filteredFacts
                 .slice(0, 100)
-                .map((f) => (
+                .map((fact) => (
+
                   <Fact
-                    key={f.id}
-                    f={f}
-                    onClick={() => setSelected(f)}
+                    key={fact.id}
+                    f={fact}
+                    onClick={() =>
+                      setSelected(fact)
+                    }
                   />
+
                 ))
+
             )}
 
           </section>
+
         )}
 
 
         {/* =================================================
             RELATIONSHIPS
-        ================================================== */}
+        ================================================= */}
 
         {tab === 'Relationships' && (
+
           <section className="panel">
 
             <h2>
               Cross-document relationships
             </h2>
 
+
             {rels.length === 0 ? (
+
               <div className="empty">
+
                 No relationships found.
+
+                <br />
+
                 Upload two or more related PDFs
                 to compare facts.
+
               </div>
+
             ) : (
-              rels.map((r) => (
+
+              rels.map((relationship) => (
+
                 <Rel
-                  key={r.id}
-                  r={r}
+                  key={relationship.id}
+                  r={relationship}
                   detailed
                 />
+
               ))
+
             )}
 
           </section>
+
         )}
 
 
         {/* =================================================
             EVALUATION
-        ================================================== */}
+        ================================================= */}
 
         {tab === 'Evaluation' && (
-          <Evaluation rels={rels} />
+
+          <Evaluation
+            rels={rels}
+            facts={facts}
+          />
+
         )}
 
 
         {/* =================================================
             FACT INSPECTOR
-        ================================================== */}
+        ================================================= */}
 
         {selected && (
+
           <div className="drawer">
 
             <button
               className="close"
-              onClick={() => setSelected(null)}
+              onClick={() =>
+                setSelected(null)
+              }
               aria-label="Close fact inspector"
             >
               ×
             </button>
 
+
             <h2>
               Fact Inspector
             </h2>
 
-            <Badge type={selected.fact_type}>
+
+            <Badge
+              type={selected.fact_type}
+            >
               {selected.fact_type || 'fact'}
             </Badge>
+
 
             <h3>
               {selected.text}
             </h3>
 
+
             <p className="muted">
+
               {selected.filename}
+
               {' · '}
+
               page {selected.page}
+
             </p>
 
 
-            {/* Structured fact information */}
+            {/* Structured information */}
 
             <div className="fact-details">
 
               <div>
-                <span>Subject</span>
+
+                <span>
+                  Subject
+                </span>
+
                 <strong>
                   {selected.subject || '—'}
                 </strong>
+
               </div>
 
+
               <div>
-                <span>Predicate</span>
+
+                <span>
+                  Predicate
+                </span>
+
                 <strong>
                   {selected.predicate || '—'}
                 </strong>
+
               </div>
 
+
               <div>
-                <span>Value</span>
+
+                <span>
+                  Value
+                </span>
+
                 <strong>
+
                   {selected.value !== null &&
                   selected.value !== undefined &&
                   selected.value !== ''
                     ? selected.value
                     : '—'}
+
                 </strong>
+
               </div>
 
+
               <div>
-                <span>Unit</span>
+
+                <span>
+                  Unit
+                </span>
+
                 <strong>
                   {selected.unit || '—'}
                 </strong>
+
               </div>
 
             </div>
@@ -616,7 +1043,8 @@ function App() {
               </b>
 
               <p>
-                {selected.evidence || selected.text}
+                {selected.evidence ||
+                  selected.text}
               </p>
 
             </div>
@@ -627,30 +1055,42 @@ function App() {
             <div className="meta">
 
               <span>
+
                 Confidence{' '}
+
                 {typeof selected.confidence === 'number'
-                  ? `${(selected.confidence * 100).toFixed(0)}%`
+                  ? `${(
+                      selected.confidence * 100
+                    ).toFixed(0)}%`
                   : '—'}
+
               </span>
 
+
               <span>
+
                 Normalized{' '}
+
                 {selected.normalized_value !== null &&
                 selected.normalized_value !== undefined &&
                 selected.normalized_value !== ''
                   ? selected.normalized_value
                   : '—'}
+
                 {' '}
+
                 {selected.normalized_unit || ''}
+
               </span>
 
             </div>
 
 
-            {/* Dates */}
+            {/* Time */}
 
             {selected.dates &&
               selected.dates.length > 0 && (
+
                 <div className="inspector-section">
 
                   <b>
@@ -658,12 +1098,17 @@ function App() {
                   </b>
 
                   <p>
-                    {Array.isArray(selected.dates)
+
+                    {Array.isArray(
+                      selected.dates
+                    )
                       ? selected.dates.join(', ')
                       : selected.dates}
+
                   </p>
 
                 </div>
+
               )}
 
 
@@ -671,6 +1116,7 @@ function App() {
 
             {selected.entities &&
               selected.entities.length > 0 && (
+
                 <div className="inspector-section">
 
                   <b>
@@ -678,30 +1124,39 @@ function App() {
                   </b>
 
                   <p>
-                    {Array.isArray(selected.entities)
+
+                    {Array.isArray(
+                      selected.entities
+                    )
                       ? selected.entities.join(', ')
                       : selected.entities}
+
                   </p>
 
                 </div>
+
               )}
 
 
             {/* Warnings */}
 
-            {selected.warnings?.length > 0 && (
-              <div className="warning">
+            {selected.warnings &&
+              selected.warnings.length > 0 && (
 
-                <AlertTriangle />
+                <div className="warning">
 
-                <span>
-                  {selected.warnings.join('; ')}
-                </span>
+                  <AlertTriangle />
 
-              </div>
-            )}
+                  <span>
+                    {selected.warnings.join('; ')}
+                  </span>
+
+                </div>
+
+              )}
 
           </div>
+
         )}
 
       </main>
@@ -715,14 +1170,20 @@ function App() {
    CARD
 ========================================================= */
 
-function Card({ icon, n, t }) {
+function Card({
+  icon,
+  n,
+  t
+}) {
 
   return (
+
     <div className="card">
 
       <div className="icon">
         {icon}
       </div>
+
 
       <div>
 
@@ -737,6 +1198,7 @@ function Card({ icon, n, t }) {
       </div>
 
     </div>
+
   );
 }
 
@@ -745,12 +1207,16 @@ function Card({ icon, n, t }) {
    DOCUMENT TABLE
 ========================================================= */
 
-function DocTable({ docs }) {
+function DocTable({
+  docs
+}) {
 
   return (
+
     <div className="table">
 
       {docs.length ? (
+
         <>
 
           <div className="tr th">
@@ -764,41 +1230,64 @@ function DocTable({ docs }) {
             </span>
 
             <span>
+              Facts
+            </span>
+
+            <span>
               Status
             </span>
 
           </div>
 
 
-          {docs.map((d) => (
+          {docs.map((document) => (
 
             <div
               className="tr"
-              key={d.id}
+              key={document.id}
             >
 
               <span>
 
                 <b>
-                  {d.filename}
+                  {document.filename}
                 </b>
 
+
                 <small>
-                  {d.sha256
-                    ? d.sha256.slice(0, 12) + '…'
+
+                  {document.sha256
+                    ? document.sha256.slice(0, 12) + '…'
                     : ''}
+
                 </small>
 
               </span>
 
 
-              {/* FIX:
-                  Backend uses page_count.
-                  Fallback to pages for compatibility.
-              */}
+              {/* =========================================
+                  REAL PDF PAGE COUNT
+              ========================================= */}
 
               <span>
-                {d.page_count ?? d.pages ?? 0}
+                {Number.isFinite(
+                  Number(document.page_count)
+                )
+                  ? Number(document.page_count)
+                  : 0}
+              </span>
+
+
+              {/* =========================================
+                  FACT COUNT
+              ========================================= */}
+
+              <span>
+                {Number.isFinite(
+                  Number(document.fact_count)
+                )
+                  ? Number(document.fact_count)
+                  : 0}
               </span>
 
 
@@ -819,13 +1308,19 @@ function DocTable({ docs }) {
       ) : (
 
         <div className="empty">
+
           No documents yet.
-          Upload the starter PDFs to begin.
+
+          <br />
+
+          Upload PDFs to begin.
+
         </div>
 
       )}
 
     </div>
+
   );
 }
 
@@ -834,16 +1329,24 @@ function DocTable({ docs }) {
    FACT
 ========================================================= */
 
-function Fact({ f, onClick }) {
+function Fact({
+  f,
+  onClick
+}) {
 
-  const value =
+  const hasValue =
     f.value !== null &&
     f.value !== undefined &&
-    f.value !== ''
-      ? `${f.value}${f.unit ? ` ${f.unit}` : ''}`
-      : null;
+    f.value !== '';
+
+
+  const value = hasValue
+    ? `${f.value}${f.unit ? ` ${f.unit}` : ''}`
+    : null;
+
 
   return (
+
     <article
       className="fact"
       onClick={onClick}
@@ -855,10 +1358,15 @@ function Fact({ f, onClick }) {
           {f.fact_type || 'fact'}
         </Badge>
 
+
         <span className="muted">
+
           {f.filename}
+
           {' · '}
+
           p.{f.page}
+
         </span>
 
       </div>
@@ -875,36 +1383,51 @@ function Fact({ f, onClick }) {
 
 
       <small>
+
         {value ? (
+
           <>
             Value: {value}
             {' · '}
           </>
+
         ) : (
+
           <>
             Semantic fact
             {' · '}
           </>
+
         )}
 
+
         Confidence{' '}
+
         {typeof f.confidence === 'number'
-          ? `${(f.confidence * 100).toFixed(0)}%`
+          ? `${(
+              f.confidence * 100
+            ).toFixed(0)}%`
           : '—'}
 
+
         {' · '}
+
 
         {f.normalized_value !== null &&
         f.normalized_value !== undefined &&
         f.normalized_value !== ''
-          ? `Normalized: ${f.normalized_value} ${f.normalized_unit || ''}`
+          ? `Normalized: ${f.normalized_value} ${
+              f.normalized_unit || ''
+            }`
           : 'not normalized'}
+
       </small>
 
 
       <ChevronRight />
 
     </article>
+
   );
 }
 
@@ -913,21 +1436,33 @@ function Fact({ f, onClick }) {
    RELATIONSHIP
 ========================================================= */
 
-function Rel({ r, detailed }) {
+function Rel({
+  r,
+  detailed = false
+}) {
 
   return (
+
     <article className="rel">
 
       <div className="relhead">
 
         <Badge type={r.relation}>
-          {r.relation}
+
+          {r.relation ||
+            'RELATED'}
+
         </Badge>
 
+
         <span>
+
           {typeof r.score === 'number'
-            ? `${(r.score * 100).toFixed(0)}% match`
+            ? `${(
+                r.score * 100
+              ).toFixed(0)}% match`
             : '—'}
+
         </span>
 
       </div>
@@ -935,18 +1470,24 @@ function Rel({ r, detailed }) {
 
       <div className="pair">
 
+
         <div>
 
           <b>
-            {r.document_a}
+            {r.document_a ||
+              'Document A'}
           </b>
 
+
           <small>
-            p.{r.page_a}
+            p.{r.page_a ?? '—'}
           </small>
 
+
           <p>
-            {r.evidence_a}
+            {r.evidence_a ||
+              r.fact_text_a ||
+              'No evidence available.'}
           </p>
 
         </div>
@@ -960,15 +1501,20 @@ function Rel({ r, detailed }) {
         <div>
 
           <b>
-            {r.document_b}
+            {r.document_b ||
+              'Document B'}
           </b>
 
+
           <small>
-            p.{r.page_b}
+            p.{r.page_b ?? '—'}
           </small>
 
+
           <p>
-            {r.evidence_b}
+            {r.evidence_b ||
+              r.fact_text_b ||
+              'No evidence available.'}
           </p>
 
         </div>
@@ -977,12 +1523,18 @@ function Rel({ r, detailed }) {
 
 
       {detailed && (
+
         <p className="explain">
-          {r.explanation}
+
+          {r.explanation ||
+            'No explanation available.'}
+
         </p>
+
       )}
 
     </article>
+
   );
 }
 
@@ -991,26 +1543,59 @@ function Rel({ r, detailed }) {
    EVALUATION
 ========================================================= */
 
-function Evaluation({ rels }) {
+function Evaluation({
+  rels,
+  facts
+}) {
 
-  const counts = Object.fromEntries(
-    [
-      'CORROBORATES',
-      'CONTRADICTS',
-      'RECONCILES',
-      'RELATED',
-      'UNCERTAIN'
-    ].map((x) => [
-      x,
-      rels.filter(
-        (r) => r.relation === x
-      ).length
-    ])
-  );
+  const counts = useMemo(() => {
+
+    const result = {
+      CORROBORATES: 0,
+      CONTRADICTS: 0,
+      RECONCILES: 0,
+      RELATED: 0,
+      UNCERTAIN: 0
+    };
+
+
+    rels.forEach(
+      (relationship) => {
+
+        const relation =
+          String(
+            relationship.relation || ''
+          ).toUpperCase();
+
+
+        if (
+          Object.prototype.hasOwnProperty.call(
+            result,
+            relation
+          )
+        ) {
+
+          result[relation] += 1;
+
+        }
+
+      }
+    );
+
+
+    return result;
+
+  }, [rels]);
 
 
   return (
+
     <div className="grid">
+
+
+      {/* =================================================
+          REQUIRED BENCHMARK CASES
+      ================================================= */}
 
       <section className="panel">
 
@@ -1064,6 +1649,7 @@ function Evaluation({ rels }) {
 
           <p>
             Q1/Q2/H1 GDP vs full FY25 GDP.
+            These represent different time scopes.
           </p>
 
           <Badge type="reconciles">
@@ -1081,8 +1667,9 @@ function Evaluation({ rels }) {
 
           <p>
             Nearby “internal mobility”
-            and “promoted” facts must
-            remain separate.
+            and “promoted” facts must remain
+            separate rather than assigning
+            1,509 to the promotion statement.
           </p>
 
           <Badge type="related">
@@ -1094,6 +1681,10 @@ function Evaluation({ rels }) {
       </section>
 
 
+      {/* =================================================
+          OBSERVED RELATIONSHIPS
+      ================================================= */}
+
       <section className="panel">
 
         <h2>
@@ -1102,19 +1693,19 @@ function Evaluation({ rels }) {
 
 
         {Object.entries(counts).map(
-          ([k, v]) => (
+          ([name, count]) => (
 
             <div
               className="count"
-              key={k}
+              key={name}
             >
 
               <span>
-                {k}
+                {name}
               </span>
 
               <strong>
-                {v}
+                {count}
               </strong>
 
             </div>
@@ -1122,12 +1713,43 @@ function Evaluation({ rels }) {
           )
         )}
 
+
+        <div className="count">
+
+          <span>
+            Total facts
+          </span>
+
+          <strong>
+            {facts.length}
+          </strong>
+
+        </div>
+
+
+        <div className="count">
+
+          <span>
+            Total relationships
+          </span>
+
+          <strong>
+            {rels.length}
+          </strong>
+
+        </div>
+
       </section>
 
     </div>
+
   );
 }
 
+
+/* =========================================================
+   ROOT
+========================================================= */
 
 createRoot(
   document.getElementById('root')
